@@ -164,23 +164,10 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     wb.save(output)
     return output.getvalue()
 
-# --- Streamlit UI Components ---
-st.title("📊 DHIS2 Tracker Exporter")
-st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
-
-with st.form("dhis2_form"):
-    web_url = st.text_input("DHIS2 Base URL", value="https://hmistraining.mm.dhis2.net/train")
-    col1, col2 = st.columns(2)
-    with col1:
-        username = st.text_input("Username", value="Ygn_NTP1")
-    with col2:
-        password = st.text_input("Password", type="password", value="District@1")
-
 # PROGRAM ID { Registration&Screening : UZF0HrTlps0 , 
 #               DiagnosticEvaluation : GvywHD6crky , 
 #               TBCaseSurveillence : Lt6P15ps7f6 ,
 #               TBContactInvestigationTPT : cQsXTtAJ3HW }
-    prog_input = st.text_area("Program IDs (comma-separated)", value="UZF0HrTlps0, GvywHD6crky, Lt6P15ps7f6, cQsXTtAJ3HW")
 
 # ORGANISATION UNIT ID { YTPMATA_HLG : KqjORlUe8Yc , 
 #                       YTPMATA_KMD : rTTCKrLpxTB ,
@@ -191,28 +178,122 @@ with st.form("dhis2_form"):
 #                       YTPMATA_MYG : mPwLv1cjror ,
 #                       YTPMATA_SPT : aMAEOgli6W8 }
 
+# # --- Streamlit UI Components ---
+# st.title("📊 DHIS2 Tracker Exporter")
+# st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
 
-    ou_input = st.text_area("Org Unit IDs (comma-separated)", value="KqjORlUe8Yc, rTTCKrLpxTB, XHz6CPxTAbR, MlBn9fEP74R, aBfPB9AwbF5, OeZsFpNKLP5, mPwLv1cjror, aMAEOgli6W8")
+# with st.form("dhis2_form"):
+#     web_url = st.text_input("DHIS2 Base URL", value="https://hmistraining.mm.dhis2.net/train")
+#     col1, col2 = st.columns(2)
+#     with col1:
+#         username = st.text_input("Username", value="Ygn_NTP1")
+#     with col2:
+#         password = st.text_input("Password", type="password", value="District@1")
+
+
+
+#     prog_input = st.text_area("Program IDs (comma-separated)", value="UZF0HrTlps0, GvywHD6crky, Lt6P15ps7f6, cQsXTtAJ3HW")
+
+
+
+
+#     ou_input = st.text_area("Org Unit IDs (comma-separated)", value="KqjORlUe8Yc, rTTCKrLpxTB, XHz6CPxTAbR, MlBn9fEP74R, aBfPB9AwbF5, OeZsFpNKLP5, mPwLv1cjror, aMAEOgli6W8")
     
+#     submitted = st.form_submit_button("Extract & Process Data")
+
+# if submitted:
+#     prog_ids = [p.strip() for p in prog_input.split(",") if p.strip()]
+#     ou_ids = [o.strip() for o in ou_input.split(",") if o.strip()]
+
+#     with st.spinner("Connecting to DHIS2 and extracting data..."):
+#         df_result = get_data_dhis2(web_url, username, password, prog_ids, ou_ids)
+
+#     if df_result.empty:
+#         st.error("No data extracted. Check your parameters or credentials.")
+#     else:
+#         st.success(f"Successfully extracted {len(df_result)} records!")
+#         excel_data = convert_df_to_excel_bytes(df_result)
+        
+#         st.download_button(
+#             label="💾 Download Excel File (.xlsx)",
+#             data=excel_data,
+#             file_name="DHIS2_Tracker_Export.xlsx",
+#             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+#             type="primary"
+#         )
+
+
+# --- Streamlit UI Components ---
+st.title("📊 DHIS2 Tracker Exporter")
+st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
+
+# Define Mappings
+PROGRAM_MAP = {
+    "Registration & Screening": "UZF0HrTlps0",
+    "Diagnostic Evaluation": "GvywHD6crky",
+    "TB Case Surveillance": "Lt6P15ps7f6",
+    "TB Contact Investigation TPT": "cQsXTtAJ3HW"
+}
+
+TOWNSHIP_OU_MAP = {
+    "HLG (Hlaingtharya)": ["KqjORlUe8Yc"],
+    "KMD (Kamayut)": ["rTTCKrLpxTB"],
+    "SDG (Shwepyitha)": ["XHz6CPxTAbR"],
+    "TGG (Tanggui / Thingangyun)": ["MlBn9fEP74R", "aBfPB9AwbF5"],
+    "SOK (South Okkalapa)": ["OeZsFpNKLP5"],
+    "MYG (Mayangone)": ["mPwLv1cjror"],
+    "SPT (Seikkyi Kanaungto)": ["aMAEOgli6W8"]
+}
+
+with st.form("dhis2_form"):
+    web_url = st.text_input("DHIS2 Base URL", value="https://hmistraining.mm.dhis2.net/train")
+    col1, col2 = st.columns(2)
+    with col1:
+        username = st.text_input("Username", value="Ygn_NTP1")
+    with col2:
+        password = st.text_input("Password", type="password", value="District@1")
+
+    # Program Selection UI
+    selected_programs = st.multiselect(
+        "Select Programs",
+        options=list(PROGRAM_MAP.keys()),
+        default=list(PROGRAM_MAP.keys())
+    )
+
+    # Township Selection UI
+    selected_townships = st.multiselect(
+        "Select Townships",
+        options=list(TOWNSHIP_OU_MAP.keys()),
+        default=list(TOWNSHIP_OU_MAP.keys())
+    )
+
     submitted = st.form_submit_button("Extract & Process Data")
 
 if submitted:
-    prog_ids = [p.strip() for p in prog_input.split(",") if p.strip()]
-    ou_ids = [o.strip() for o in ou_input.split(",") if o.strip()]
+    # Extract selected Program IDs
+    prog_ids = [PROGRAM_MAP[p] for p in selected_programs]
 
-    with st.spinner("Connecting to DHIS2 and extracting data..."):
-        df_result = get_data_dhis2(web_url, username, password, prog_ids, ou_ids)
+    # Extract and flatten selected Township Org Unit IDs
+    ou_ids = []
+    for township in selected_townships:
+        ou_ids.extend(TOWNSHIP_OU_MAP[township])
 
-    if df_result.empty:
-        st.error("No data extracted. Check your parameters or credentials.")
+    if not prog_ids or not ou_ids:
+        st.warning("Please select at least one Program and one Township.")
     else:
-        st.success(f"Successfully extracted {len(df_result)} records!")
-        excel_data = convert_df_to_excel_bytes(df_result)
-        
-        st.download_button(
-            label="💾 Download Excel File (.xlsx)",
-            data=excel_data,
-            file_name="DHIS2_Tracker_Export.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
+        with st.spinner("Connecting to DHIS2 and extracting data..."):
+            df_result = get_data_dhis2(web_url, username, password, prog_ids, ou_ids)
+
+        if df_result.empty:
+            st.error("No data extracted. Check your parameters or credentials.")
+        else:
+            st.success(f"Successfully extracted {len(df_result)} records!")
+            excel_data = convert_df_to_excel_bytes(df_result)
+            
+            st.download_button(
+                label="💾 Download Excel File (.xlsx)",
+                data=excel_data,
+                file_name="DHIS2_Tracker_Export.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
