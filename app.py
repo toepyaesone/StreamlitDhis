@@ -236,13 +236,13 @@ PROGRAM_MAP = {
 }
 
 TOWNSHIP_OU_MAP = {
-    "HLG (Hlaingtharya)": ["KqjORlUe8Yc"],
-    "KMD (Kamayut)": ["rTTCKrLpxTB"],
-    "SDG (Shwepyitha)": ["XHz6CPxTAbR"],
-    "TGG (Tanggui / Thingangyun)": ["MlBn9fEP74R", "aBfPB9AwbF5"],
+    "HLG (Hlaing)": ["KqjORlUe8Yc"],
+    "KMD (Kyeemyindaing)": ["rTTCKrLpxTB"],
+    "SDG (Dagon Myothit South)": ["XHz6CPxTAbR"],
+    "TGG (Thingangyun)": ["aBfPB9AwbF5"],
     "SOK (South Okkalapa)": ["OeZsFpNKLP5"],
     "MYG (Mayangone)": ["mPwLv1cjror"],
-    "SPT (Seikkyi Kanaungto)": ["aMAEOgli6W8"]
+    "SPT (Shwepyithar)": ["aMAEOgli6W8"]
 }
 
 with st.form("dhis2_form"):
