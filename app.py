@@ -172,12 +172,27 @@ with st.form("dhis2_form"):
     web_url = st.text_input("DHIS2 Base URL", value="https://hmistraining.mm.dhis2.net/train")
     col1, col2 = st.columns(2)
     with col1:
-        username = st.text_input("Username", value="MATA_ntp")
+        username = st.text_input("Username", value="Ygn_NTP1")
     with col2:
         password = st.text_input("Password", type="password", value="District@1")
 
+# PROGRAM ID { Registration&Screening : UZF0HrTlps0 , 
+#               DiagnosticEvaluation : GvywHD6crky , 
+#               TBCaseSurveillence : Lt6P15ps7f6 ,
+#               TBContactInvestigationTPT : cQsXTtAJ3HW }
     prog_input = st.text_area("Program IDs (comma-separated)", value="UZF0HrTlps0, GvywHD6crky, Lt6P15ps7f6, cQsXTtAJ3HW")
-    ou_input = st.text_area("Org Unit IDs (comma-separated)", value="ZL8xjYM5wGV, KqjORlUe8Yc")
+
+# ORGANISATION UNIT ID { YTPMATA_HLG : KqjORlUe8Yc , 
+#                       YTPMATA_KMD : rTTCKrLpxTB ,
+#                       YTPMATA_SDG : XHz6CPxTAbR , 
+#                       YTPMMA_TGG : MlBn9fEP74R ,
+#                       YTPMATA_TGG : aBfPB9AwbF5 ,
+#                       YTPMATA_SOK : OeZsFpNKLP5 ,
+#                       YTPMATA_MYG : mPwLv1cjror ,
+#                       YTPMATA_SPT : aMAEOgli6W8 }
+
+
+    ou_input = st.text_area("Org Unit IDs (comma-separated)", value="KqjORlUe8Yc, rTTCKrLpxTB, XHz6CPxTAbR, MlBn9fEP74R, aBfPB9AwbF5, OeZsFpNKLP5, mPwLv1cjror, aMAEOgli6W8")
     
     submitted = st.form_submit_button("Extract & Process Data")
 
