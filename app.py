@@ -310,19 +310,6 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 # --- Streamlit UI Components ---
 
-DHIS2_LOGO_URL = "https://github.com/dhis2/dhis2-identity/blob/1b5ca9c7da13bdb7595444223b32988a42e3cc1e/web/Logo/Default/dhis2-logo-rgb-positive.png"
-
-st.markdown(
-    f"""
-    <div style="display: flex; align-items: center; gap: 14px; margin-top: -10px; margin-bottom: 10px;">
-        <img src="{DHIS2_LOGO_URL}" width="160">
-        <h1 style="margin: 0;">Tracker Exporter</h1>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
-
 # st.title("📊 DHIS2 Tracker Exporter")
 # st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
 
