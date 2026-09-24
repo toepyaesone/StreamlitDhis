@@ -160,13 +160,27 @@ def get_data_dhis2(web: str, username: str, password: str, idprogram: list[str],
     session.close()
     return pd.DataFrame(all_records)
 
-
 def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """Formats DataFrame into a styled Excel file in-memory."""
     output = io.BytesIO()
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)
+    wb.remove(wb.active)  # Remove default active sheet
 
+    # Define Column Selection for YgnTBPro
+    SelectedColumnList = [
+        'Org Unit Name', 'created', 'lastUpdated', 'Nationality', 'Home Address', 
+        'GEN - Name', 'Father Name', 'District', 'GEN - Date of birth', 'Age', 
+        'Ward', 'Unique ID (UPI)', 'GEN - Sex', 'Ward / Village tract', 'NRC No.', 
+        'GEN - Contact phone number (local)', 'Township (T)', 'Region/State', 
+        'enrollment_date', 'enrollment_status', '[TB Screening] Loss of appetite', 
+        '[TB Screening] TB CS - Risk factor alcohol', '[TB Screening] CXR result category', 
+        '[TB Screening] TB CS - Risk factor undernourishment', '[TB Screening] Cough more than 2 weeks', 
+        '[TB Screening] Chest pain', '[TB Screening] CXR screening date', 
+        '[TB Screening] TB CS - Risk factor smoking', '[TB Screening] TB CS - Risk factor diabetes', 
+        '[TB Screening] CXR screening facility type', '[TB Screening] Referral organization', 
+        '[TB Screening] Referral activity'
+    ]
+
+    # Style Definitions
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
     data_font = Font(name="Segoe UI", size=10)
@@ -175,25 +189,29 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
         left=Side(style="thin", color="D9D9D9"),
         right=Side(style="thin", color="D9D9D9"),
         top=Side(style="thin", color="D9D9D9"),
-        bottom=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9")
     )
 
-    group_col = "program_name" if "program_name" in df.columns else "program_id"
-    for prog_label, prog_df in df.groupby(group_col, dropna=False):
-        sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
-        ws = wb.create_sheet(title=sheet_title)
+    def _format_and_populate_sheet(ws, sheet_df: pd.DataFrame):
+        """Helper function to format headers, cells, zebra-striping, and auto-fit columns."""
         ws.views.sheetView[0].showGridLines = True
+        
+        # Clean up columns that are completely empty
+        clean_df = sheet_df.dropna(how="all", axis=1)
+        headers = list(clean_df.columns)
+        
+        if not headers:
+            return
 
-        prog_df_clean = prog_df.dropna(how="all", axis=1)
-        headers = list(prog_df_clean.columns)
+        # Append Header
         ws.append(headers)
-
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.fill, cell.font = header_fill, header_font
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        for row_idx, record in enumerate(prog_df_clean.to_dict(orient="records"), start=2):
+        # Append Data Rows & Apply Styling
+        for row_idx, record in enumerate(clean_df.to_dict(orient="records"), start=2):
             ws.append([record.get(col, "") for col in headers])
             is_even = row_idx % 2 == 0
             for col_idx in range(1, len(headers) + 1):
@@ -203,14 +221,88 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
                 if is_even:
                     cell.fill = alt_fill
 
+        # Freeze Headers & Set Column Widths
         ws.freeze_panes = "A2"
         for col in ws.columns:
             max_len = max(len(str(cell.value or "")) for cell in col)
             col_letter = get_column_letter(col[0].column)
             ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
 
+    # 1. ADD CONSOLIDATED SHEET (All Data)
+    ws_consolidated = wb.create_sheet(title="Consolidated")
+    _format_and_populate_sheet(ws_consolidated, df)
+
+    # 2. ADD YgnTBPro SHEET (Filter Selected Columns that exist in df)
+    existing_cols = [col for col in SelectedColumnList if col in df.columns]
+    df_ygntbpro = df[existing_cols] if existing_cols else pd.DataFrame()
+    ws_ygntbpro = wb.create_sheet(title="YgnTBPro")
+    _format_and_populate_sheet(ws_ygntbpro, df_ygntbpro)
+
+    # 3. ADD PROGRAM-SPECIFIC SHEETS
+    group_col = "program_name" if "program_name" in df.columns else "program_id"
+    if group_col in df.columns:
+        for prog_label, prog_df in df.groupby(group_col, dropna=False):
+            # Clean sheet title (Max 30 chars, remove illegal characters)
+            sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
+            for char in [":", "\\", "/", "?", "*", "[", "]"]:
+                sheet_title = sheet_title.replace(char, "_")
+            
+            ws_prog = wb.create_sheet(title=sheet_title)
+            _format_and_populate_sheet(ws_prog, prog_df)
+
     wb.save(output)
     return output.getvalue()
+
+# def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+#     """Formats DataFrame into a styled Excel file in-memory."""
+#     output = io.BytesIO()
+#     wb = openpyxl.Workbook()
+#     wb.remove(wb.active)
+
+#     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+#     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+#     data_font = Font(name="Segoe UI", size=10)
+#     alt_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
+#     thin_border = Border(
+#         left=Side(style="thin", color="D9D9D9"),
+#         right=Side(style="thin", color="D9D9D9"),
+#         top=Side(style="thin", color="D9D9D9"),
+#         bottom=Side(style="thin", color="D9D9D9"),
+#     )
+
+#     group_col = "program_name" if "program_name" in df.columns else "program_id"
+#     for prog_label, prog_df in df.groupby(group_col, dropna=False):
+#         sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
+#         ws = wb.create_sheet(title=sheet_title)
+#         ws.views.sheetView[0].showGridLines = True
+
+#         prog_df_clean = prog_df.dropna(how="all", axis=1)
+#         headers = list(prog_df_clean.columns)
+#         ws.append(headers)
+
+#         for col_idx in range(1, len(headers) + 1):
+#             cell = ws.cell(row=1, column=col_idx)
+#             cell.fill, cell.font = header_fill, header_font
+#             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+#         for row_idx, record in enumerate(prog_df_clean.to_dict(orient="records"), start=2):
+#             ws.append([record.get(col, "") for col in headers])
+#             is_even = row_idx % 2 == 0
+#             for col_idx in range(1, len(headers) + 1):
+#                 cell = ws.cell(row=row_idx, column=col_idx)
+#                 cell.font, cell.border = data_font, thin_border
+#                 cell.alignment = Alignment(vertical="center")
+#                 if is_even:
+#                     cell.fill = alt_fill
+
+#         ws.freeze_panes = "A2"
+#         for col in ws.columns:
+#             max_len = max(len(str(cell.value or "")) for cell in col)
+#             col_letter = get_column_letter(col[0].column)
+#             ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
+
+#     wb.save(output)
+#     return output.getvalue()
 
 
 # --- Streamlit UI Components ---
