@@ -231,9 +231,9 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
             col_letter = get_column_letter(col[0].column)
             ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
 
-    # 1. ADD CONSOLIDATED SHEET (All Data)
-    ws_consolidated = wb.create_sheet(title="Consolidated")
-    _format_and_populate_sheet(ws_consolidated, df)
+    # 1. ADD CONSOLIDATED SHEET (All DHIS2 Data)
+    ws_dhis2 = wb.create_sheet(title="DHIS2 Data")
+    _format_and_populate_sheet(ws_dhis2, df)
 
     # 2. ADD YgnTBPro SHEET (Filter Selected Columns that exist in df)
     existing_cols = [col for col in SelectedColumnList if col in df.columns]
