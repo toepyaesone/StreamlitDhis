@@ -158,7 +158,10 @@ def get_data_dhis2(web: str, username: str, password: str, idprogram: list[str],
                 break
 
     session.close()
-    return pd.DataFrame(all_records)
+    df_dhis = pd.DataFrame(all_records)
+    # df_dhis = df_dhis.reindex(sorted(df_dhis.columns), axis=1)  # Sort columns alphabetically (A -> Z)
+    df_dhis = df_dhis.reindex(sorted(df_dhis.columns, reverse=True), axis=1) # Sort columns in reverse alphabetical order (Z -> A)
+    return df_dhis
 
 def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
