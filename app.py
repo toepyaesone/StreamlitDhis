@@ -309,9 +309,8 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 
 # --- Streamlit UI Components ---
-
-# st.title("📊 DHIS2 Tracker Exporter")
-# st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
+st.title("📊 DHIS2 Tracker Exporter")
+st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
 
 # Defined Mappings
 PROGRAM_MAP = {
