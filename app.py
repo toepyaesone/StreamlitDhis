@@ -12,7 +12,7 @@ from urllib3.util import Retry
 
 # --- Streamlit Page Configuration ---
 st.set_page_config(
-    page_title="DHIS2 Tracker Exporter", 
+    page_title="DHIS2 TB Tracker Data Exporter", 
     page_icon="📊", 
     layout="centered"
 )
@@ -224,24 +224,47 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     # 1. DHIS2 Data Sheet (Raw DataFrame - Full Column Count)
     sheets_data["DHIS2 Data"] = df.copy()
 
-    # 2. Combined Sheet (Same columns as DHIS2 Data sheet, collapsed/merged rows per UPI)
+    # 2. Combined Sheet (Unique UPI per row with combined unique cell values)
     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df.columns else "trackedEntityInstance"
 
     if join_key in df.columns and not df.empty:
-        # Group by the join key and combine non-null values across all original columns
+        def combine_unique_values(series: pd.Series):
+            """Combines non-null unique values for each grouped cell into a single string."""
+            # Filter out null, NaN, or empty values
+            non_null = series.dropna().astype(str).str.strip()
+            valid_vals = [val for val in non_null if val != ""]
+            
+            if not valid_vals:
+                return None
+            
+            # Extract unique values while preserving order
+            unique_vals = list(dict.fromkeys(valid_vals))
+            
+            # If only 1 unique value exists across rows, return it directly
+            if len(unique_vals) == 1:
+                return unique_vals[0]
+            
+            # If multiple unique values exist across rows, join them with comma
+            return " | ".join(unique_vals)
+
+        # Apply combination logic per column grouped by UPI
         combined_df = (
             df.groupby(join_key, as_index=False, dropna=False)
-            .first()  # Takes the first non-null value per column for each group
+            .agg(combine_unique_values)
         )
         
-        # Ensure exact column structure and order match DHIS2 Data sheet
-        sheets_data["Combined"] = combined_df.reindex(columns=df.columns)
+        # Keep exact column order matching DHIS2 Data sheet
+        # sheets_data["Combined"] = combined_df.reindex(columns=df.columns)
+        df_combined = combined_df.reindex(columns=df.columns)
+        sheets_data["Combined"] = df_combined
     else:
-        sheets_data["Combined"] = df.copy()
+        # sheets_data["Combined"] = df.copy()
+        df_combined = df.copy()
+        sheets_data["Combined"] = df_combined
 
     # 3. YgnTBPro Sheet (Filtered by SELECTED_COLUMN_LIST)
-    existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
-    sheets_data["YgnTBPro"] = df[existing_cols] if existing_cols else pd.DataFrame()
+    existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df_combined.columns]
+    sheets_data["YgnTBPro"] = df_combined[existing_cols] if existing_cols else pd.DataFrame()
 
     # 4. Program-Specific Sheets
     group_col = "program_name" if "program_name" in df.columns else "program_id"
@@ -258,11 +281,12 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 # def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 #     """Processes the original DataFrame and splits it into named DataFrames for each Excel sheet."""
 #     sheets_data: dict[str, pd.DataFrame] = {}
+    
 #     SELECTED_COLUMN_LIST = [
-#         'Unique ID (UPI)', 'GEN - Name', 'Age', 'GEN - Sex','Nationality', 'Home Address','GEN - Contact phone number (local)','NRC No.', 
-#         'GEN - Date of birth', 'GEN - Date of birth is estimated', 'Father Name', 'Region/State','District', 'Township (T)','Village', 'Ward', 'Ward / Village tract', 
-#         'Unique ID (UPI) - Index Case', 'Relationship with index','created', 'lastUpdated', 'enrollment_date', 'enrollment_status', 
-#         'orgUnit_id','Org Unit Name', 'program_id', 'program_name',
+#         'Unique ID (UPI)', 'GEN - Name', 'Age', 'GEN - Sex', 'Nationality', 'Home Address', 'GEN - Contact phone number (local)', 'NRC No.', 
+#         'GEN - Date of birth', 'GEN - Date of birth is estimated', 'Father Name', 'Region/State', 'District', 'Township (T)', 'Village', 'Ward', 'Ward / Village tract', 
+#         'Unique ID (UPI) - Index Case', 'Relationship with index', 'created', 'lastUpdated', 'enrollment_date', 'enrollment_status', 
+#         'orgUnit_id', 'Org Unit Name', 'program_id', 'program_name',
 #         '[TB Screening] Age (at screening)', '[TB Screening] Any TB drug resistance history?', '[TB Screening] BMI', 
 #         '[TB Screening] Breathlessness', '[TB Screening] CXR result', '[TB Screening] CXR result category', '[TB Screening] CXR screening date', 
 #         '[TB Screening] CXR screening done', '[TB Screening] CXR screening facility type', '[TB Screening] Chest pain', '[TB Screening] Cough more than 2 weeks', 
@@ -280,35 +304,30 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 #         '[2. TB Treatment] TB CS - Treatment regimen', '[4. Outcome] TB CS - Treatment outcome', '[4. Outcome] TB CS - Treatment outcome delay (weeks)'
 #     ]
 
-#     # 1. DHIS2 Data Sheet
+#     # 1. DHIS2 Data Sheet (Raw DataFrame - Full Column Count)
 #     sheets_data["DHIS2 Data"] = df.copy()
 
-#     # 2. Combined Sheet
-#     group_col = "program_name" if "program_name" in df.columns else "program_id"
+#     # 2. Combined Sheet (Same columns as DHIS2 Data sheet, collapsed/merged rows per UPI)
 #     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df.columns else "trackedEntityInstance"
 
-#     if join_key in df.columns and group_col in df.columns and not df.empty:
-#         program_dfs = [group_df.copy() for _, group_df in df.groupby(group_col, dropna=False)]
-
-#         if len(program_dfs) == 1:
-#             merged_df = program_dfs[0].copy()
-#         else:
-#             merged_df = reduce(
-#                 lambda left, right: merge_two_program_dfs(left, right, join_key),
-#                 program_dfs
-#             )
-
-#         existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in merged_df.columns]
-#         sheets_data["Combined"] = merged_df[existing_selected_cols]
+#     if join_key in df.columns and not df.empty:
+#         # Group by the join key and combine non-null values across all original columns
+#         combined_df = (
+#             df.groupby(join_key, as_index=False, dropna=False)
+#             .first()  # Takes the first non-null value per column for each group
+#         )
+        
+#         # Ensure exact column structure and order match DHIS2 Data sheet
+#         sheets_data["Combined"] = combined_df.reindex(columns=df.columns)
 #     else:
-#         existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
-#         sheets_data["Combined"] = df[existing_selected_cols] if existing_selected_cols else pd.DataFrame()
+#         sheets_data["Combined"] = df.copy()
 
-#     # 3. YgnTBPro Sheet
+#     # 3. YgnTBPro Sheet (Filtered by SELECTED_COLUMN_LIST)
 #     existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
 #     sheets_data["YgnTBPro"] = df[existing_cols] if existing_cols else pd.DataFrame()
 
 #     # 4. Program-Specific Sheets
+#     group_col = "program_name" if "program_name" in df.columns else "program_id"
 #     if group_col in df.columns:
 #         for prog_label, prog_df in df.groupby(group_col, dropna=False):
 #             sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
