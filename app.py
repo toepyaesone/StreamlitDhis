@@ -195,15 +195,15 @@ def merge_two_program_dfs(left: pd.DataFrame, right: pd.DataFrame, join_key: str
 
     return pd.DataFrame(final_cols)
 
-
 def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Processes the original DataFrame and splits it into named DataFrames for each Excel sheet."""
     sheets_data: dict[str, pd.DataFrame] = {}
+    
     SELECTED_COLUMN_LIST = [
-        'Unique ID (UPI)', 'GEN - Name', 'Age', 'GEN - Sex','Nationality', 'Home Address','GEN - Contact phone number (local)','NRC No.', 
-        'GEN - Date of birth', 'GEN - Date of birth is estimated', 'Father Name', 'Region/State','District', 'Township (T)','Village', 'Ward', 'Ward / Village tract', 
-        'Unique ID (UPI) - Index Case', 'Relationship with index','created', 'lastUpdated', 'enrollment_date', 'enrollment_status', 
-        'orgUnit_id','Org Unit Name', 'program_id', 'program_name',
+        'Unique ID (UPI)', 'GEN - Name', 'Age', 'GEN - Sex', 'Nationality', 'Home Address', 'GEN - Contact phone number (local)', 'NRC No.', 
+        'GEN - Date of birth', 'GEN - Date of birth is estimated', 'Father Name', 'Region/State', 'District', 'Township (T)', 'Village', 'Ward', 'Ward / Village tract', 
+        'Unique ID (UPI) - Index Case', 'Relationship with index', 'created', 'lastUpdated', 'enrollment_date', 'enrollment_status', 
+        'orgUnit_id', 'Org Unit Name', 'program_id', 'program_name',
         '[TB Screening] Age (at screening)', '[TB Screening] Any TB drug resistance history?', '[TB Screening] BMI', 
         '[TB Screening] Breathlessness', '[TB Screening] CXR result', '[TB Screening] CXR result category', '[TB Screening] CXR screening date', 
         '[TB Screening] CXR screening done', '[TB Screening] CXR screening facility type', '[TB Screening] Chest pain', '[TB Screening] Cough more than 2 weeks', 
@@ -221,35 +221,30 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         '[2. TB Treatment] TB CS - Treatment regimen', '[4. Outcome] TB CS - Treatment outcome', '[4. Outcome] TB CS - Treatment outcome delay (weeks)'
     ]
 
-    # 1. DHIS2 Data Sheet
+    # 1. DHIS2 Data Sheet (Raw DataFrame - Full Column Count)
     sheets_data["DHIS2 Data"] = df.copy()
 
-    # 2. Combined Sheet
-    group_col = "program_name" if "program_name" in df.columns else "program_id"
+    # 2. Combined Sheet (Same columns as DHIS2 Data sheet, collapsed/merged rows per UPI)
     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df.columns else "trackedEntityInstance"
 
-    if join_key in df.columns and group_col in df.columns and not df.empty:
-        program_dfs = [group_df.copy() for _, group_df in df.groupby(group_col, dropna=False)]
-
-        if len(program_dfs) == 1:
-            merged_df = program_dfs[0].copy()
-        else:
-            merged_df = reduce(
-                lambda left, right: merge_two_program_dfs(left, right, join_key),
-                program_dfs
-            )
-
-        existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in merged_df.columns]
-        sheets_data["Combined"] = merged_df[existing_selected_cols]
+    if join_key in df.columns and not df.empty:
+        # Group by the join key and combine non-null values across all original columns
+        combined_df = (
+            df.groupby(join_key, as_index=False, dropna=False)
+            .first()  # Takes the first non-null value per column for each group
+        )
+        
+        # Ensure exact column structure and order match DHIS2 Data sheet
+        sheets_data["Combined"] = combined_df.reindex(columns=df.columns)
     else:
-        existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
-        sheets_data["Combined"] = df[existing_selected_cols] if existing_selected_cols else pd.DataFrame()
+        sheets_data["Combined"] = df.copy()
 
-    # 3. YgnTBPro Sheet
+    # 3. YgnTBPro Sheet (Filtered by SELECTED_COLUMN_LIST)
     existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
     sheets_data["YgnTBPro"] = df[existing_cols] if existing_cols else pd.DataFrame()
 
     # 4. Program-Specific Sheets
+    group_col = "program_name" if "program_name" in df.columns else "program_id"
     if group_col in df.columns:
         for prog_label, prog_df in df.groupby(group_col, dropna=False):
             sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
@@ -259,6 +254,70 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
             sheets_data[sheet_title] = prog_df
 
     return sheets_data
+
+# def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+#     """Processes the original DataFrame and splits it into named DataFrames for each Excel sheet."""
+#     sheets_data: dict[str, pd.DataFrame] = {}
+#     SELECTED_COLUMN_LIST = [
+#         'Unique ID (UPI)', 'GEN - Name', 'Age', 'GEN - Sex','Nationality', 'Home Address','GEN - Contact phone number (local)','NRC No.', 
+#         'GEN - Date of birth', 'GEN - Date of birth is estimated', 'Father Name', 'Region/State','District', 'Township (T)','Village', 'Ward', 'Ward / Village tract', 
+#         'Unique ID (UPI) - Index Case', 'Relationship with index','created', 'lastUpdated', 'enrollment_date', 'enrollment_status', 
+#         'orgUnit_id','Org Unit Name', 'program_id', 'program_name',
+#         '[TB Screening] Age (at screening)', '[TB Screening] Any TB drug resistance history?', '[TB Screening] BMI', 
+#         '[TB Screening] Breathlessness', '[TB Screening] CXR result', '[TB Screening] CXR result category', '[TB Screening] CXR screening date', 
+#         '[TB Screening] CXR screening done', '[TB Screening] CXR screening facility type', '[TB Screening] Chest pain', '[TB Screening] Cough more than 2 weeks', 
+#         '[TB Screening] Current activity', '[TB Screening] Enroll to Diagnostic Evaluation', '[TB Screening] Fatigue and Tiredness', '[TB Screening] Fever more than 2 weeks', 
+#         '[TB Screening] Haemoptysis', '[TB Screening] Healthcare worker population', '[TB Screening] Height (in inches)', '[TB Screening] Household Contact', 
+#         '[TB Screening] Loss of appetite', '[TB Screening] Migrant population', '[TB Screening] Night sweats', '[TB Screening] No symptoms related with TB', 
+#         '[TB Screening] Number of previous TB episodes', '[TB Screening] Other referral organisation (Specify)', '[TB Screening] Other symptoms related with TB', 
+#         '[TB Screening] Previous TB History', '[TB Screening] Previous TB regimen', '[TB Screening] Referral activity', '[TB Screening] Referral organization', 
+#         '[TB Screening] Specify other symptoms', '[TB Screening] TB CS - HIV infection', '[TB Screening] TB CS - HIV status date', '[TB Screening] TB CS - Registration - Type of patient in last TB Treatment', 
+#         '[TB Screening] TB CS - Risk factor alcohol', '[TB Screening] TB CS - Risk factor diabetes', '[TB Screening] TB CS - Risk factor smoking', 
+#         '[TB Screening] TB CS - Risk factor undernourishment', '[TB Screening] Type of CXR', '[TB Screening] Weight (in kgs)', '[TB Screening] Weight loss', '[TB Screening] Year of last TB Treatment',
+#         '[2. TB Treatment] TB CS - Diagnosis date', '[2. TB Treatment] TB CS - First-line treatment regimen composition', '[2. TB Treatment] TB CS - First-line treatment start date', 
+#         '[2. TB Treatment] TB CS - Manually assigned resistance classification', '[2. TB Treatment] TB CS - Outcome due date', '[2. TB Treatment] TB CS - Reassign resistance classification', 
+#         '[2. TB Treatment] TB CS - Resistance at diagnosis', '[2. TB Treatment] TB CS - Resistance classification', '[2. TB Treatment] TB CS - Treatment initiation delay (days)', 
+#         '[2. TB Treatment] TB CS - Treatment regimen', '[4. Outcome] TB CS - Treatment outcome', '[4. Outcome] TB CS - Treatment outcome delay (weeks)'
+#     ]
+
+#     # 1. DHIS2 Data Sheet
+#     sheets_data["DHIS2 Data"] = df.copy()
+
+#     # 2. Combined Sheet
+#     group_col = "program_name" if "program_name" in df.columns else "program_id"
+#     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df.columns else "trackedEntityInstance"
+
+#     if join_key in df.columns and group_col in df.columns and not df.empty:
+#         program_dfs = [group_df.copy() for _, group_df in df.groupby(group_col, dropna=False)]
+
+#         if len(program_dfs) == 1:
+#             merged_df = program_dfs[0].copy()
+#         else:
+#             merged_df = reduce(
+#                 lambda left, right: merge_two_program_dfs(left, right, join_key),
+#                 program_dfs
+#             )
+
+#         existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in merged_df.columns]
+#         sheets_data["Combined"] = merged_df[existing_selected_cols]
+#     else:
+#         existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
+#         sheets_data["Combined"] = df[existing_selected_cols] if existing_selected_cols else pd.DataFrame()
+
+#     # 3. YgnTBPro Sheet
+#     existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
+#     sheets_data["YgnTBPro"] = df[existing_cols] if existing_cols else pd.DataFrame()
+
+#     # 4. Program-Specific Sheets
+#     if group_col in df.columns:
+#         for prog_label, prog_df in df.groupby(group_col, dropna=False):
+#             sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
+#             for char in [":", "\\", "/", "?", "*", "[", "]"]:
+#                 sheet_title = sheet_title.replace(char, "_")
+            
+#             sheets_data[sheet_title] = prog_df
+
+#     return sheets_data
 
 
 def convert_df_to_excel_bytes(data: pd.DataFrame | dict[str, pd.DataFrame]) -> bytes:
