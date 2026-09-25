@@ -200,10 +200,10 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Processes the original DataFrame and splits it into named DataFrames for each Excel sheet."""
     sheets_data: dict[str, pd.DataFrame] = {}
     SELECTED_COLUMN_LIST = [
-        'Age', 'District', 'Father Name', 'GEN - Contact phone number (local)', 'GEN - Date of birth', 
-        'GEN - Date of birth is estimated', 'GEN - Name', 'GEN - Sex', 'Home Address', 'NRC No.', 'Nationality',
-        'Org Unit Name', 'Region/State', 'Relationship with index', 'Township (T)', 'Unique ID (UPI)', 'Unique ID (UPI) - Index Case',
-        'Village', 'Ward', 'Ward / Village tract', 'created', 'enrollment_date', 'enrollment_status', 'lastUpdated', 'orgUnit_id', 'program_id', 'program_name', 'trackedEntityInstance',
+        'Unique ID (UPI)', 'GEN - Name', 'Age', 'GEN - Sex','Nationality', 'Home Address','GEN - Contact phone number (local)','NRC No.', 
+        'GEN - Date of birth', 'GEN - Date of birth is estimated', 'Father Name', 'Region/State','District', 'Township (T)','Village', 'Ward', 'Ward / Village tract', 
+        'Unique ID (UPI) - Index Case', 'Relationship with index','created', 'lastUpdated', 'enrollment_date', 'enrollment_status', 
+        'orgUnit_id','Org Unit Name', 'program_id', 'program_name',
         '[TB Screening] Age (at screening)', '[TB Screening] Any TB drug resistance history?', '[TB Screening] BMI', 
         '[TB Screening] Breathlessness', '[TB Screening] CXR result', '[TB Screening] CXR result category', '[TB Screening] CXR screening date', 
         '[TB Screening] CXR screening done', '[TB Screening] CXR screening facility type', '[TB Screening] Chest pain', '[TB Screening] Cough more than 2 weeks', 
