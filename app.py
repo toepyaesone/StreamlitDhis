@@ -11,14 +11,12 @@ import streamlit as st
 from urllib3.util import Retry
 
 # --- Streamlit Page Configuration ---
-DHIS2_FAVICON = "https://raw.githubusercontent.com/dhis2/dhis2-identity/master/logos/dhis2-logo-icon/dhis2-logo-icon-48.png"
-DHIS2_LOGO_URL = "https://raw.githubusercontent.com/dhis2/dhis2-identity/master/logos/dhis2-logo-rgb-positive/dhis2-logo-rgb-positive-200.png"
-
 st.set_page_config(
     page_title="DHIS2 Tracker Exporter", 
-    page_icon=DHIS2_FAVICON, 
+    page_icon="📊", 
     layout="centered"
 )
+
 
 # --- Helper & Backend Functions ---
 def normalize_base_url(url: str) -> str:
@@ -168,6 +166,36 @@ def get_data_dhis2(web: str, username: str, password: str, idprogram: list[str],
     return df_dhis
 
 
+def merge_two_program_dfs(left: pd.DataFrame, right: pd.DataFrame, join_key: str) -> pd.DataFrame:
+    """Safely outer merges two program DataFrames on a join key without duplicate column errors."""
+    # Deduplicate columns in both dataframes prior to merging
+    left = left.loc[:, ~left.columns.duplicated()].copy()
+    right = right.loc[:, ~right.columns.duplicated()].copy()
+
+    merged = pd.merge(left, right, on=join_key, how="outer", suffixes=("_left", "_right"))
+
+    # Resolve duplicate column names created during merge
+    final_cols = {}
+    for col in merged.columns:
+        if col == join_key:
+            final_cols[col] = merged[col]
+        elif col.endswith("_left"):
+            base_name = col[:-5]
+            right_col = f"{base_name}_right"
+            if right_col in merged.columns:
+                final_cols[base_name] = merged[col].combine_first(merged[right_col])
+            else:
+                final_cols[base_name] = merged[col]
+        elif col.endswith("_right"):
+            base_name = col[:-6]
+            if base_name not in final_cols:
+                final_cols[base_name] = merged[col]
+        else:
+            final_cols[col] = merged[col]
+
+    return pd.DataFrame(final_cols)
+
+
 def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Processes the original DataFrame and splits it into named DataFrames for each Excel sheet."""
     sheets_data: dict[str, pd.DataFrame] = {}
@@ -175,7 +203,7 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         'Age', 'District', 'Father Name', 'GEN - Contact phone number (local)', 'GEN - Date of birth', 
         'GEN - Date of birth is estimated', 'GEN - Name', 'GEN - Sex', 'Home Address', 'NRC No.', 'Nationality',
         'Org Unit Name', 'Region/State', 'Relationship with index', 'Township (T)', 'Unique ID (UPI)', 'Unique ID (UPI) - Index Case',
-        'Village', 'Ward', 'Ward / Village tract','created', 'enrollment_date', 'enrollment_status', 'lastUpdated', 'orgUnit_id', 'program_id', 'program_name', 'trackedEntityInstance',
+        'Village', 'Ward', 'Ward / Village tract', 'created', 'enrollment_date', 'enrollment_status', 'lastUpdated', 'orgUnit_id', 'program_id', 'program_name', 'trackedEntityInstance',
         '[TB Screening] Age (at screening)', '[TB Screening] Any TB drug resistance history?', '[TB Screening] BMI', 
         '[TB Screening] Breathlessness', '[TB Screening] CXR result', '[TB Screening] CXR result category', '[TB Screening] CXR screening date', 
         '[TB Screening] CXR screening done', '[TB Screening] CXR screening facility type', '[TB Screening] Chest pain', '[TB Screening] Cough more than 2 weeks', 
@@ -196,34 +224,20 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     # 1. DHIS2 Data Sheet
     sheets_data["DHIS2 Data"] = df.copy()
 
-    # 2. Combined Sheet (Outer Merge by UPI with Deduplication)
+    # 2. Combined Sheet
     group_col = "program_name" if "program_name" in df.columns else "program_id"
     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df.columns else "trackedEntityInstance"
 
     if join_key in df.columns and group_col in df.columns and not df.empty:
-        program_dfs = []
-        for _, group_df in df.groupby(group_col, dropna=False):
-            # Clean duplicate columns within each program frame before merge
-            clean_group = group_df.loc[:, ~group_df.columns.duplicated()].copy()
-            program_dfs.append(clean_group)
+        program_dfs = [group_df.copy() for _, group_df in df.groupby(group_col, dropna=False)]
 
         if len(program_dfs) == 1:
             merged_df = program_dfs[0].copy()
         else:
             merged_df = reduce(
-                lambda left, right: pd.merge(
-                    left.loc[:, ~left.columns.duplicated()], 
-                    right.loc[:, ~right.columns.duplicated()], 
-                    on=join_key, 
-                    how="outer", 
-                    suffixes=("", "_dup")
-                ),
+                lambda left, right: merge_two_program_dfs(left, right, join_key),
                 program_dfs
             )
-
-        clean_cols = [c[:-4] if c.endswith("_dup") else c for c in merged_df.columns]
-        merged_df.columns = clean_cols
-        merged_df = merged_df.groupby(level=0, axis=1).first()
 
         existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in merged_df.columns]
         sheets_data["Combined"] = merged_df[existing_selected_cols]
@@ -294,7 +308,6 @@ def convert_df_to_excel_bytes(data: pd.DataFrame | dict[str, pd.DataFrame]) -> b
             col_letter = get_column_letter(col[0].column)
             ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
 
-    # Allow input to be either a DataFrame or pre-prepared dict
     if isinstance(data, dict):
         sheets_dict = data
     else:
@@ -309,15 +322,7 @@ def convert_df_to_excel_bytes(data: pd.DataFrame | dict[str, pd.DataFrame]) -> b
 
 
 # --- Streamlit UI Components ---
-st.markdown(
-    f"""
-    <div style="display: flex; align-items: center; gap: 14px; margin-top: -10px; margin-bottom: 12px;">
-        <img src="{DHIS2_LOGO_URL}" width="160" style="object-fit: contain;">
-        <h1 style="margin: 0; padding: 0;">Tracker Exporter</h1>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+st.title("📊 DHIS2 Tracker Exporter")
 st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
 
 # Defined Mappings
@@ -377,7 +382,6 @@ if submitted:
         else:
             st.success(f"Successfully extracted {len(df_result)} records!")
             
-            # Prepare sheets dict and pass directly to Excel converter
             sheets_dict = prepare_excel_sheets_data(df_result)
             excel_data = convert_df_to_excel_bytes(sheets_dict)
 
