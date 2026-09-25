@@ -547,7 +547,8 @@ if submitted:
             st.error("No data extracted. Check your parameters, credentials, or selected Org Units.")
         else:
             st.success(f"Successfully extracted {len(df_result)} records!")
-            excel_data = convert_df_to_excel_bytes(df_result)
+            df_excel = prepare_excel_sheets_data(df_result)
+            excel_data = convert_df_to_excel_bytes(df_excel)
 
             st.download_button(
                 label="💾 Download Excel File (.xlsx)",
