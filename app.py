@@ -11,8 +11,14 @@ import streamlit as st
 from urllib3.util import Retry
 
 # --- Streamlit Page Configuration ---
-st.set_page_config(page_title="DHIS2 Tracker Exporter", page_icon="📊", layout="centered")
+DHIS2_FAVICON = "https://raw.githubusercontent.com/dhis2/dhis2-identity/master/logos/dhis2-logo-icon/dhis2-logo-icon-48.png"
+DHIS2_LOGO_URL = "https://raw.githubusercontent.com/dhis2/dhis2-identity/master/logos/dhis2-logo-rgb-positive/dhis2-logo-rgb-positive-200.png"
 
+st.set_page_config(
+    page_title="DHIS2 Tracker Exporter", 
+    page_icon=DHIS2_FAVICON, 
+    layout="centered"
+)
 
 # --- Helper & Backend Functions ---
 def normalize_base_url(url: str) -> str:
@@ -60,11 +66,9 @@ def get_data_dhis2(web: str, username: str, password: str, idprogram: list[str],
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
-    # Fetch metadata map
     meta_map = build_dhis2_metadata_map(session, base_url)
     all_records = []
 
-    # Detect endpoint version (Legacy vs Tracker API v2)
     active_endpoint = legacy_endpoint
     test_res = session.get(legacy_endpoint, params={"pageSize": 1}, timeout=15)
     if test_res.status_code in (404, 410):
@@ -145,7 +149,6 @@ def get_data_dhis2(web: str, username: str, password: str, idprogram: list[str],
 
                     all_records.append(row)
 
-                # Pagination logic
                 pager = data.get("pager", {})
                 page_count = pager.get("pageCount")
                 if page_count is not None:
@@ -160,58 +163,66 @@ def get_data_dhis2(web: str, username: str, password: str, idprogram: list[str],
 
     session.close()
     df_dhis = pd.DataFrame(all_records)
-    df_dhis = df_dhis.reindex(sorted(df_dhis.columns), axis=1)  # Sort columns alphabetically (A -> Z)
-    # df_dhis = df_dhis.reindex(sorted(df_dhis.columns, reverse=True), axis=1) # Sort columns in reverse alphabetical order (Z -> A)
+    if not df_dhis.empty:
+        df_dhis = df_dhis.reindex(sorted(df_dhis.columns), axis=1)
     return df_dhis
+
 
 def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Processes the original DataFrame and splits it into named DataFrames for each Excel sheet."""
     sheets_data: dict[str, pd.DataFrame] = {}
-    SELECTED_COLUMN_LIST = ['Age', 'District', 'Father Name', 'GEN - Contact phone number (local)', 'GEN - Date of birth', 
-                            'GEN - Date of birth is estimated', 'GEN - Name', 'GEN - Sex', 'Home Address', 'NRC No.', 'Nationality',
-                            'Org Unit Name', 'Region/State', 'Relationship with index', 'Township (T)', 'Unique ID (UPI)', 'Unique ID (UPI) - Index Case',
-                            'Village', 'Ward', 'Ward / Village tract','created', 'enrollment_date', 'enrollment_status', 'lastUpdated', 'orgUnit_id', 'program_id', 'program_name', 'trackedEntityInstance',
-                            '[TB Screening] Age (at screening)', '[TB Screening] Any TB drug resistance history?', '[TB Screening] BMI', 
-                            '[TB Screening] Breathlessness', '[TB Screening] CXR result', '[TB Screening] CXR result category', '[TB Screening] CXR screening date', 
-                            '[TB Screening] CXR screening done', '[TB Screening] CXR screening facility type', '[TB Screening] Chest pain', '[TB Screening] Cough more than 2 weeks', 
-                            '[TB Screening] Current activity', '[TB Screening] Enroll to Diagnostic Evaluation', '[TB Screening] Fatigue and Tiredness', '[TB Screening] Fever more than 2 weeks', 
-                            '[TB Screening] Haemoptysis', '[TB Screening] Healthcare worker population', '[TB Screening] Height (in inches)', '[TB Screening] Household Contact', 
-                            '[TB Screening] Loss of appetite', '[TB Screening] Migrant population', '[TB Screening] Night sweats', '[TB Screening] No symptoms related with TB', 
-                            '[TB Screening] Number of previous TB episodes', '[TB Screening] Other referral organisation (Specify)', '[TB Screening] Other symptoms related with TB', 
-                            '[TB Screening] Previous TB History', '[TB Screening] Previous TB regimen', '[TB Screening] Referral activity', '[TB Screening] Referral organization', 
-                            '[TB Screening] Specify other symptoms', '[TB Screening] TB CS - HIV infection', '[TB Screening] TB CS - HIV status date', '[TB Screening] TB CS - Registration - Type of patient in last TB Treatment', 
-                            '[TB Screening] TB CS - Risk factor alcohol', '[TB Screening] TB CS - Risk factor diabetes', '[TB Screening] TB CS - Risk factor smoking', 
-                            '[TB Screening] TB CS - Risk factor undernourishment', '[TB Screening] Type of CXR', '[TB Screening] Weight (in kgs)', '[TB Screening] Weight loss', '[TB Screening] Year of last TB Treatment',
-                            '[2. TB Treatment] TB CS - Diagnosis date', '[2. TB Treatment] TB CS - First-line treatment regimen composition', '[2. TB Treatment] TB CS - First-line treatment start date', 
-                            '[2. TB Treatment] TB CS - Manually assigned resistance classification', '[2. TB Treatment] TB CS - Outcome due date', '[2. TB Treatment] TB CS - Reassign resistance classification', 
-                            '[2. TB Treatment] TB CS - Resistance at diagnosis', '[2. TB Treatment] TB CS - Resistance classification', '[2. TB Treatment] TB CS - Treatment initiation delay (days)', 
-                            '[2. TB Treatment] TB CS - Treatment regimen', '[4. Outcome] TB CS - Treatment outcome', '[4. Outcome] TB CS - Treatment outcome delay (weeks)', ]
-    # 1. DHIS2 Data Sheet (Raw DataFrame)
+    SELECTED_COLUMN_LIST = [
+        'Age', 'District', 'Father Name', 'GEN - Contact phone number (local)', 'GEN - Date of birth', 
+        'GEN - Date of birth is estimated', 'GEN - Name', 'GEN - Sex', 'Home Address', 'NRC No.', 'Nationality',
+        'Org Unit Name', 'Region/State', 'Relationship with index', 'Township (T)', 'Unique ID (UPI)', 'Unique ID (UPI) - Index Case',
+        'Village', 'Ward', 'Ward / Village tract','created', 'enrollment_date', 'enrollment_status', 'lastUpdated', 'orgUnit_id', 'program_id', 'program_name', 'trackedEntityInstance',
+        '[TB Screening] Age (at screening)', '[TB Screening] Any TB drug resistance history?', '[TB Screening] BMI', 
+        '[TB Screening] Breathlessness', '[TB Screening] CXR result', '[TB Screening] CXR result category', '[TB Screening] CXR screening date', 
+        '[TB Screening] CXR screening done', '[TB Screening] CXR screening facility type', '[TB Screening] Chest pain', '[TB Screening] Cough more than 2 weeks', 
+        '[TB Screening] Current activity', '[TB Screening] Enroll to Diagnostic Evaluation', '[TB Screening] Fatigue and Tiredness', '[TB Screening] Fever more than 2 weeks', 
+        '[TB Screening] Haemoptysis', '[TB Screening] Healthcare worker population', '[TB Screening] Height (in inches)', '[TB Screening] Household Contact', 
+        '[TB Screening] Loss of appetite', '[TB Screening] Migrant population', '[TB Screening] Night sweats', '[TB Screening] No symptoms related with TB', 
+        '[TB Screening] Number of previous TB episodes', '[TB Screening] Other referral organisation (Specify)', '[TB Screening] Other symptoms related with TB', 
+        '[TB Screening] Previous TB History', '[TB Screening] Previous TB regimen', '[TB Screening] Referral activity', '[TB Screening] Referral organization', 
+        '[TB Screening] Specify other symptoms', '[TB Screening] TB CS - HIV infection', '[TB Screening] TB CS - HIV status date', '[TB Screening] TB CS - Registration - Type of patient in last TB Treatment', 
+        '[TB Screening] TB CS - Risk factor alcohol', '[TB Screening] TB CS - Risk factor diabetes', '[TB Screening] TB CS - Risk factor smoking', 
+        '[TB Screening] TB CS - Risk factor undernourishment', '[TB Screening] Type of CXR', '[TB Screening] Weight (in kgs)', '[TB Screening] Weight loss', '[TB Screening] Year of last TB Treatment',
+        '[2. TB Treatment] TB CS - Diagnosis date', '[2. TB Treatment] TB CS - First-line treatment regimen composition', '[2. TB Treatment] TB CS - First-line treatment start date', 
+        '[2. TB Treatment] TB CS - Manually assigned resistance classification', '[2. TB Treatment] TB CS - Outcome due date', '[2. TB Treatment] TB CS - Reassign resistance classification', 
+        '[2. TB Treatment] TB CS - Resistance at diagnosis', '[2. TB Treatment] TB CS - Resistance classification', '[2. TB Treatment] TB CS - Treatment initiation delay (days)', 
+        '[2. TB Treatment] TB CS - Treatment regimen', '[4. Outcome] TB CS - Treatment outcome', '[4. Outcome] TB CS - Treatment outcome delay (weeks)'
+    ]
+
+    # 1. DHIS2 Data Sheet
     sheets_data["DHIS2 Data"] = df.copy()
 
-    # 2. Combined Sheet (Group by Program -> Outer Merge by UPI -> Filter Selected Columns)
+    # 2. Combined Sheet (Outer Merge by UPI with Deduplication)
     group_col = "program_name" if "program_name" in df.columns else "program_id"
     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df.columns else "trackedEntityInstance"
 
     if join_key in df.columns and group_col in df.columns and not df.empty:
-        program_dfs = [group_df for _, group_df in df.groupby(group_col, dropna=False)]
+        program_dfs = []
+        for _, group_df in df.groupby(group_col, dropna=False):
+            # Clean duplicate columns within each program frame before merge
+            clean_group = group_df.loc[:, ~group_df.columns.duplicated()].copy()
+            program_dfs.append(clean_group)
 
         if len(program_dfs) == 1:
             merged_df = program_dfs[0].copy()
         else:
-            # Outer merge program dataframes on join_key
             merged_df = reduce(
                 lambda left, right: pd.merge(
-                    left, right, on=join_key, how="outer", suffixes=("", "_dup")
+                    left.loc[:, ~left.columns.duplicated()], 
+                    right.loc[:, ~right.columns.duplicated()], 
+                    on=join_key, 
+                    how="outer", 
+                    suffixes=("", "_dup")
                 ),
                 program_dfs
             )
 
-        # Remove suffix flags to group identical column names together
         clean_cols = [c[:-4] if c.endswith("_dup") else c for c in merged_df.columns]
         merged_df.columns = clean_cols
-
-        # Merge duplicate-named columns by taking the first non-null value per row
         merged_df = merged_df.groupby(level=0, axis=1).first()
 
         existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in merged_df.columns]
@@ -220,7 +231,7 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         existing_selected_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
         sheets_data["Combined"] = df[existing_selected_cols] if existing_selected_cols else pd.DataFrame()
 
-    # 3. YgnTBPro Sheet (Direct Filter of Selected Columns from original df)
+    # 3. YgnTBPro Sheet
     existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df.columns]
     sheets_data["YgnTBPro"] = df[existing_cols] if existing_cols else pd.DataFrame()
 
@@ -236,13 +247,12 @@ def prepare_excel_sheets_data(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     return sheets_data
 
 
-def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """Converts DataFrame into a formatted multi-sheet Excel workbook as bytes."""
+def convert_df_to_excel_bytes(data: pd.DataFrame | dict[str, pd.DataFrame]) -> bytes:
+    """Converts a DataFrame or pre-prepared sheets dict into a formatted Excel workbook as bytes."""
     output = io.BytesIO()
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # Remove default active sheet
 
-    # Style Definitions
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
     data_font = Font(name="Segoe UI", size=10)
@@ -255,24 +265,19 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     )
 
     def _format_and_populate_sheet(ws, sheet_df: pd.DataFrame):
-        """Helper function to format headers, cells, zebra-striping, and auto-fit columns."""
         ws.views.sheetView[0].showGridLines = True
-        
-        # Clean up columns that are completely empty
         clean_df = sheet_df.dropna(how="all", axis=1)
         headers = list(clean_df.columns)
         
         if not headers:
             return
 
-        # Append Header
         ws.append(headers)
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.fill, cell.font = header_fill, header_font
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        # Append Data Rows & Apply Styling
         for row_idx, record in enumerate(clean_df.to_dict(orient="records"), start=2):
             ws.append([record.get(col, "") for col in headers])
             is_even = row_idx % 2 == 0
@@ -283,15 +288,18 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
                 if is_even:
                     cell.fill = alt_fill
 
-        # Freeze Headers & Set Column Widths
         ws.freeze_panes = "A2"
         for col in ws.columns:
             max_len = max(len(str(cell.value or "")) for cell in col)
             col_letter = get_column_letter(col[0].column)
             ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
 
-    # Obtain split DataFrames dictionary and render to Excel
-    sheets_dict = prepare_excel_sheets_data(df)
+    # Allow input to be either a DataFrame or pre-prepared dict
+    if isinstance(data, dict):
+        sheets_dict = data
+    else:
+        sheets_dict = prepare_excel_sheets_data(data)
+
     for sheet_name, sheet_df in sheets_dict.items():
         ws = wb.create_sheet(title=sheet_name)
         _format_and_populate_sheet(ws, sheet_df)
@@ -299,193 +307,17 @@ def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     wb.save(output)
     return output.getvalue() 
 
-# def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-#     output = io.BytesIO()
-#     wb = openpyxl.Workbook()
-#     wb.remove(wb.active)  # Remove default active sheet
-
-#     # Define Column Selection for YgnTBPro
-#     SelectedColumnList = [
-#         'Org Unit Name', 'created', 'lastUpdated', 'Nationality', 'Home Address', 
-#         'GEN - Name', 'Father Name', 'District', 'GEN - Date of birth', 'Age', 
-#         'Ward', 'Unique ID (UPI)', 'GEN - Sex', 'Ward / Village tract', 'NRC No.', 
-#         'GEN - Contact phone number (local)', 'Township (T)', 'Region/State', 
-#         'enrollment_date', 'enrollment_status', '[TB Screening] Loss of appetite', 
-#         '[TB Screening] TB CS - Risk factor alcohol', '[TB Screening] CXR result category', 
-#         '[TB Screening] TB CS - Risk factor undernourishment', '[TB Screening] Cough more than 2 weeks', 
-#         '[TB Screening] Chest pain', '[TB Screening] CXR screening date', 
-#         '[TB Screening] TB CS - Risk factor smoking', '[TB Screening] TB CS - Risk factor diabetes', 
-#         '[TB Screening] CXR screening facility type', '[TB Screening] Referral organization', 
-#         '[TB Screening] Referral activity'
-#     ]
-
-#     # Style Definitions
-#     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-#     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-#     data_font = Font(name="Segoe UI", size=10)
-#     alt_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
-#     thin_border = Border(
-#         left=Side(style="thin", color="D9D9D9"),
-#         right=Side(style="thin", color="D9D9D9"),
-#         top=Side(style="thin", color="D9D9D9"),
-#         bottom=Side(style="thin", color="D9D9D9")
-#     )
-
-#     def _format_and_populate_sheet(ws, sheet_df: pd.DataFrame):
-#         """Helper function to format headers, cells, zebra-striping, and auto-fit columns."""
-#         ws.views.sheetView[0].showGridLines = True
-        
-#         # Clean up columns that are completely empty
-#         clean_df = sheet_df.dropna(how="all", axis=1)
-#         headers = list(clean_df.columns)
-        
-#         if not headers:
-#             return
-
-#         # Append Header
-#         ws.append(headers)
-#         for col_idx in range(1, len(headers) + 1):
-#             cell = ws.cell(row=1, column=col_idx)
-#             cell.fill, cell.font = header_fill, header_font
-#             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-#         # Append Data Rows & Apply Styling
-#         for row_idx, record in enumerate(clean_df.to_dict(orient="records"), start=2):
-#             ws.append([record.get(col, "") for col in headers])
-#             is_even = row_idx % 2 == 0
-#             for col_idx in range(1, len(headers) + 1):
-#                 cell = ws.cell(row=row_idx, column=col_idx)
-#                 cell.font, cell.border = data_font, thin_border
-#                 cell.alignment = Alignment(vertical="center")
-#                 if is_even:
-#                     cell.fill = alt_fill
-
-#         # Freeze Headers & Set Column Widths
-#         ws.freeze_panes = "A2"
-#         for col in ws.columns:
-#             max_len = max(len(str(cell.value or "")) for cell in col)
-#             col_letter = get_column_letter(col[0].column)
-#             ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
-
-#     # 1. ADD DHIS2 SHEET (All DHIS2 Data)
-#     ws_dhis2 = wb.create_sheet(title="DHIS2 Data")
-#     _format_and_populate_sheet(ws_dhis2, df)
-
-# ###############################################################################################
-#     # 2. ADD Combined SHEET (Group by Program -> Outer Merge by UPI -> Filter Selected Columns)
-#     group_col = "program_name" if "program_name" in df.columns else "program_id"
-#     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df.columns else "trackedEntityInstance"
-
-#     if join_key in df.columns and group_col in df.columns and not df.empty:
-#         # Group DataFrames by Program
-#         program_dfs = [group_df for _, group_df in df.groupby(group_col, dropna=False)]
-
-#         # Merge program DataFrames on Unique ID (UPI)
-#         if len(program_dfs) == 1:
-#             merged_df = program_dfs[0].copy()
-#         else:
-#             merged_df = reduce(
-#                 lambda left, right: pd.merge(
-#                     left, right, on=join_key, how="outer", suffixes=("", "_dup")
-#                 ),
-#                 program_dfs
-#             )
-
-#         # Combine duplicate columns created during merge (e.g. Org Unit Name, created)
-#         dup_cols = [c for c in merged_df.columns if c.endswith("_dup")]
-#         for dup_col in dup_cols:
-#             orig_col = dup_col[:-4]
-#             if orig_col in merged_df.columns:
-#                 merged_df[orig_col] = merged_df[orig_col].combine_first(merged_df[dup_col])
-#             merged_df.drop(columns=[dup_col], inplace=True)
-
-#         # Filter only existing selected columns
-#         existing_selected_cols = [col for col in SelectedColumnList if col in merged_df.columns]
-#         df_ygntbpro = merged_df[existing_selected_cols]
-#     else:
-#         # Fallback if join key is missing
-#         existing_selected_cols = [col for col in SelectedColumnList if col in df.columns]
-#         df_ygntbpro = df[existing_selected_cols] if existing_selected_cols else pd.DataFrame()
-
-#     ws_combined = wb.create_sheet(title="Combined")
-#     _format_and_populate_sheet(ws_combined, df_ygntbpro)
-# ###############################################################################################
-
-#     # 3. ADD YgnTBPro SHEET (Filter Selected Columns that exist in df)
-#     existing_cols = [col for col in SelectedColumnList if col in df.columns]
-#     df_ygntbpro = df[existing_cols] if existing_cols else pd.DataFrame()
-#     ws_ygntbpro = wb.create_sheet(title="YgnTBPro")
-#     _format_and_populate_sheet(ws_ygntbpro, df_ygntbpro)
-
-#     # 4. ADD PROGRAM-SPECIFIC SHEETS
-#     group_col = "program_name" if "program_name" in df.columns else "program_id"
-#     if group_col in df.columns:
-#         for prog_label, prog_df in df.groupby(group_col, dropna=False):
-#             # Clean sheet title (Max 30 chars, remove illegal characters)
-#             sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
-#             for char in [":", "\\", "/", "?", "*", "[", "]"]:
-#                 sheet_title = sheet_title.replace(char, "_")
-            
-#             ws_prog = wb.create_sheet(title=sheet_title)
-#             _format_and_populate_sheet(ws_prog, prog_df)
-
-#     wb.save(output)
-#     return output.getvalue()
-
-# def convert_df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-#     """Formats DataFrame into a styled Excel file in-memory."""
-#     output = io.BytesIO()
-#     wb = openpyxl.Workbook()
-#     wb.remove(wb.active)
-
-#     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-#     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-#     data_font = Font(name="Segoe UI", size=10)
-#     alt_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
-#     thin_border = Border(
-#         left=Side(style="thin", color="D9D9D9"),
-#         right=Side(style="thin", color="D9D9D9"),
-#         top=Side(style="thin", color="D9D9D9"),
-#         bottom=Side(style="thin", color="D9D9D9"),
-#     )
-
-#     group_col = "program_name" if "program_name" in df.columns else "program_id"
-#     for prog_label, prog_df in df.groupby(group_col, dropna=False):
-#         sheet_title = str(prog_label)[:30] if pd.notna(prog_label) else "Unknown_Program"
-#         ws = wb.create_sheet(title=sheet_title)
-#         ws.views.sheetView[0].showGridLines = True
-
-#         prog_df_clean = prog_df.dropna(how="all", axis=1)
-#         headers = list(prog_df_clean.columns)
-#         ws.append(headers)
-
-#         for col_idx in range(1, len(headers) + 1):
-#             cell = ws.cell(row=1, column=col_idx)
-#             cell.fill, cell.font = header_fill, header_font
-#             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-#         for row_idx, record in enumerate(prog_df_clean.to_dict(orient="records"), start=2):
-#             ws.append([record.get(col, "") for col in headers])
-#             is_even = row_idx % 2 == 0
-#             for col_idx in range(1, len(headers) + 1):
-#                 cell = ws.cell(row=row_idx, column=col_idx)
-#                 cell.font, cell.border = data_font, thin_border
-#                 cell.alignment = Alignment(vertical="center")
-#                 if is_even:
-#                     cell.fill = alt_fill
-
-#         ws.freeze_panes = "A2"
-#         for col in ws.columns:
-#             max_len = max(len(str(cell.value or "")) for cell in col)
-#             col_letter = get_column_letter(col[0].column)
-#             ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
-
-#     wb.save(output)
-#     return output.getvalue()
-
 
 # --- Streamlit UI Components ---
-st.title("📊 DHIS2 Tracker Exporter")
+st.markdown(
+    f"""
+    <div style="display: flex; align-items: center; gap: 14px; margin-top: -10px; margin-bottom: 12px;">
+        <img src="{DHIS2_LOGO_URL}" width="160" style="object-fit: contain;">
+        <h1 style="margin: 0; padding: 0;">Tracker Exporter</h1>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
 
 # Defined Mappings
@@ -514,14 +346,12 @@ with st.form("dhis2_form"):
     with col2:
         password = st.text_input("Password", type="password", value="District@1")
 
-    # Program Selection UI
     selected_programs = st.multiselect(
         "Select Programs",
         options=list(PROGRAM_MAP.keys()),
         default=list(PROGRAM_MAP.keys()),
     )
 
-    # Township Selection UI
     selected_townships = st.multiselect(
         "Select Townships",
         options=list(TOWNSHIP_OU_MAP.keys()),
@@ -531,7 +361,6 @@ with st.form("dhis2_form"):
     submitted = st.form_submit_button("Extract & Process Data")
 
 if submitted:
-    # Map selected options to UIDs
     prog_ids = [PROGRAM_MAP[p] for p in selected_programs]
     ou_ids = []
     for township in selected_townships:
@@ -547,8 +376,10 @@ if submitted:
             st.error("No data extracted. Check your parameters, credentials, or selected Org Units.")
         else:
             st.success(f"Successfully extracted {len(df_result)} records!")
-            df_excel = prepare_excel_sheets_data(df_result)
-            excel_data = convert_df_to_excel_bytes(df_excel)
+            
+            # Prepare sheets dict and pass directly to Excel converter
+            sheets_dict = prepare_excel_sheets_data(df_result)
+            excel_data = convert_df_to_excel_bytes(sheets_dict)
 
             st.download_button(
                 label="💾 Download Excel File (.xlsx)",
