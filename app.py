@@ -399,7 +399,7 @@ def convert_df_to_excel_bytes(data: pd.DataFrame | dict[str, pd.DataFrame]) -> b
 
 
 # --- Streamlit UI Components ---
-st.title("📊 DHIS2 Tracker Exporter")
+st.title("📊 DHIS2 TB Tracker Data Exporter")
 st.markdown("Extract tracked entity instances from DHIS2 and download formatted Excel files.")
 
 # Defined Mappings
