@@ -17,7 +17,6 @@ st.set_page_config(
     layout="centered"
 )
 
-
 # --- Helper & Backend Functions ---
 def normalize_base_url(url: str) -> str:
     """Ensures base_url is cleanly formatted without trailing slashes or duplicate /api paths."""
