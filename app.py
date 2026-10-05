@@ -411,20 +411,20 @@ PROGRAM_MAP = {
 }
 
 TOWNSHIP_OU_MAP = {
-    "HLG (Hlaing)": ["KqjORlUe8Yc"],
-    "KMD (Kyeemyindaing)": ["rTTCKrLpxTB"],
-    "SDG (Dagon Myothit South)": ["XHz6CPxTAbR"],
-    "TGG (Thingangyun)": ["aBfPB9AwbF5"],
-    "SOK (South Okkalapa)": ["OeZsFpNKLP5"],
-    "MYG (Mayangone)": ["mPwLv1cjror"],
-    "SPT (Shwepyithar)": ["aMAEOgli6W8"],
+    "12. YTP/Pyi Gyi Khin (Hlaing)": ["YGCPqlBamwD"], # KqjORlUe8Yc
+    "12. YTP/Pyi Gyi Khin (Kyeemyindaing)": ["dE0upZMc4xG"], # rTTCKrLpxTB
+    "12. YTP/Pyi Gyi Khin (Dagon Myothit (South))": ["mCgl8tnCaee"], # XHz6CPxTAbR
+    "12. YTP/Pyi Gyi Khin (Thingangyun)": ["lJ9AHubJTjg"], # aBfPB9AwbF5
+    "12. YTP/Pyi Gyi Khin (South Okkalapa)": ["KSRVZsryAKz"], # OeZsFpNKLP5
+    "12. YTP/Pyi Gyi Khin (Mayangone)": ["bctwifUcioE"], # mPwLv1cjror
+    "12. YTP/Pyi Gyi Khin (Shwepyithar)": ["Z7Qf4wgtHz3"], # aMAEOgli6W8
 }
 
 with st.form("dhis2_form"):
-    web_url = st.text_input("DHIS2 Base URL", value="https://hmistraining.mm.dhis2.net/train")
+    web_url = st.text_input("DHIS2 Base URL", value="https://mbdrtraining.moh.gov.mm/train") #hmistraining.mm.dhis2.net/train
     col1, col2 = st.columns(2)
     with col1:
-        username = st.text_input("Username", value="Ygn_NTP1")
+        username = st.text_input("Username", value="NTP_YTP_Central_S2") #Ygn_NTP1
     with col2:
         password = st.text_input("Password", type="password", value="District@1")
 
