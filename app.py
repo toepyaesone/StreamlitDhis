@@ -35,7 +35,6 @@ PROGRAM_MAP = {
 
 PROGRAM_ID_TO_LABEL = {v: k for k, v in PROGRAM_MAP.items()}
 
-# Clinical cascade order used as tie-breaker when enrollment_date is on the same day
 PROGRAM_CASCADE_ORDER = {
     REGISTRATION_PROGRAM_ID: 1,
     DIAGNOSTIC_PROGRAM_ID: 2,
@@ -47,7 +46,6 @@ PROGRAM_CASCADE_ORDER = {
     "TB Contact Tracing and TPT": 4,
 }
 
-# Includes both Partner/YTP OUs and Township NTP OUs for different user accounts and roles
 TOWNSHIP_OU_MAP = {
     "12. YTP/Pyi Gyi Khin (Hlaing)": ["YGCPqlBamwD", "KqjORlUe8Yc"],
     "12. YTP/Pyi Gyi Khin (Kyeemyindaing)": ["dE0upZMc4xG", "rTTCKrLpxTB"],
@@ -58,7 +56,6 @@ TOWNSHIP_OU_MAP = {
     "12. YTP/Pyi Gyi Khin (Shwepyithar)": ["Z7Qf4wgtHz3", "aMAEOgli6W8"],
 }
 
-# Required leading column order: Date, OrgUnit, UPI, Name, Age, Sex
 PRIORITY_LEADING_COLUMNS = [
     "enrollment_date",
     "Org Unit Name",
@@ -69,9 +66,7 @@ PRIORITY_LEADING_COLUMNS = [
     "GEN - Sex",
 ]
 
-# YgnTBPro target columns ordered with Date, OrgUnit, UPI, Name, Age, Sex first
 SELECTED_COLUMN_LIST = [
-    # 1. Leading Priority Columns (Date, OrgUnit, UPI, Name, Age, Sex)
     "enrollment_date",
     "Org Unit Name",
     "orgUnit_id",
@@ -79,7 +74,6 @@ SELECTED_COLUMN_LIST = [
     "GEN - Name",
     "Age",
     "GEN - Sex",
-    # 2. Remaining Demographic & Administrative Columns
     "Nationality",
     "Home Address",
     "GEN - Contact phone number (local)",
@@ -100,7 +94,6 @@ SELECTED_COLUMN_LIST = [
     "enrollment_status",
     "program_id",
     "program_name",
-    # 3. TB Screening Columns
     "[TB Screening] Age (at screening)",
     "[TB Screening] Any TB drug resistance history?",
     "[TB Screening] BMI",
@@ -143,7 +136,6 @@ SELECTED_COLUMN_LIST = [
     "[TB Screening] Weight (in kgs)",
     "[TB Screening] Weight loss",
     "[TB Screening] Year of last TB Treatment",
-    # 4. TB Treatment & Outcome Columns
     "[2. TB Treatment] TB CS - Diagnosis date",
     "[2. TB Treatment] TB CS - First-line treatment regimen composition",
     "[2. TB Treatment] TB CS - First-line treatment start date",
@@ -163,7 +155,6 @@ UID_REGEX = re.compile(r"^[A-Za-z][A-Za-z0-9]{10}$")
 
 # --- Helper & Backend Functions ---
 def normalize_base_url(url: str) -> str:
-    """Ensures base_url is cleanly formatted without trailing slashes or duplicate /api paths."""
     clean_url = url.strip().rstrip("/")
     if clean_url.endswith("/api"):
         clean_url = clean_url[:-4]
@@ -171,22 +162,17 @@ def normalize_base_url(url: str) -> str:
 
 
 def create_http_session(username: str, password: str) -> requests.Session:
-    """Creates a pooled HTTP session with automatic retries for DHIS2 requests."""
     session = requests.Session()
     session.auth = (username, password)
-    session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/6.2"})
-    retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=retries)
+    session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/6.3"})
+    retries = Retry(total=2, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
 
 
 def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Reorders any DataFrame so that Date, OrgUnit, UPI, Name, Age, Sex appear first,
-    followed by all remaining columns (excluding internal helper columns).
-    """
     if df.empty and len(df.columns) == 0:
         return df
     internal_cols = {"enrollment_id", "tei_orgUnit_id", "_upi_sort", "_date_sort", "_prog_sort", "_created_sort"}
@@ -196,7 +182,6 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.DataFrame:
-    """Sorts records chronologically by UPI and enrollment date."""
     if df.empty or join_key not in df.columns:
         return df
 
@@ -246,7 +231,6 @@ def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.
 
 
 def clean_orgunit_name_series(series: pd.Series, meta_map: dict[str, str] | None = None) -> pd.Series:
-    """Resolves raw 11-character DHIS2 UIDs in `Org Unit Name`."""
     if series.empty:
         return series
 
@@ -268,7 +252,6 @@ def clean_orgunit_name_series(series: pd.Series, meta_map: dict[str, str] | None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[dict[str, str], list[str], bool]:
-    """Fetches and caches DHIS2 metadata mappings, accessible user OUs, and endpoint type."""
     session = create_http_session(username, password)
     meta_map: dict[str, str] = {}
 
@@ -283,7 +266,7 @@ def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[
     def _fetch_meta(resource_url: tuple[str, str]):
         resource, url = resource_url
         try:
-            res = session.get(url, timeout=30)
+            res = session.get(url, timeout=25)
             if res.ok:
                 return res.json().get(resource, [])
         except Exception:
@@ -310,7 +293,7 @@ def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[
             "dataViewOrganisationUnits[id,displayName],"
             "teiSearchOrganisationUnits[id,displayName]"
         )
-        res = session.get(me_url, timeout=15)
+        res = session.get(me_url, timeout=12)
         if res.ok:
             me_data = res.json()
             for key in ("teiSearchOrganisationUnits", "dataViewOrganisationUnits", "organisationUnits"):
@@ -328,7 +311,7 @@ def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[
         test_res = session.get(
             f"{base_url}/api/trackedEntityInstances.json",
             params={"pageSize": 1, "ouMode": "ACCESSIBLE"},
-            timeout=15,
+            timeout=10,
         )
         if test_res.status_code in (404, 410):
             is_legacy = False
@@ -339,42 +322,7 @@ def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[
     return meta_map, list(user_ous), is_legacy
 
 
-def resolve_missing_ou_names(
-    session: requests.Session,
-    base_url: str,
-    df: pd.DataFrame,
-    meta_map: dict[str, str],
-) -> dict[str, str]:
-    """Resolves missing organization unit names from DHIS2 API."""
-    if df.empty or "orgUnit_id" not in df.columns:
-        return meta_map
-
-    unique_ous = df["orgUnit_id"].dropna().astype(str).unique()
-    missing_uids = [
-        uid for uid in unique_ous
-        if UID_REGEX.match(uid) and (uid not in meta_map or UID_REGEX.match(str(meta_map.get(uid, uid))))
-    ]
-
-    if not missing_uids:
-        return meta_map
-
-    try:
-        uid_filter = ",".join(missing_uids[:100])
-        url = f"{base_url}/api/organisationUnits.json?filter=id:in:[{uid_filter}]&fields=id,displayName,code&paging=false"
-        res = session.get(url, timeout=15)
-        if res.ok:
-            for item in res.json().get("organisationUnits", []):
-                uid = item.get("id")
-                if uid:
-                    meta_map[uid] = item.get("displayName") or item.get("code") or uid
-    except Exception:
-        pass
-
-    return meta_map
-
-
 def parse_tei_instances(instances: list[dict], prog: str, meta_map: dict[str, str]) -> list[dict]:
-    """Parses raw DHIS2 Tracked Entity Instances into flat dictionary records."""
     records = []
     prog_name = PROGRAM_ID_TO_LABEL.get(prog) or meta_map.get(prog, prog)
 
@@ -476,10 +424,10 @@ def fetch_paginated_tei(
     ou: str | None = None,
     ou_mode: str = "ACCESSIBLE",
 ) -> list[dict]:
-    """Paginates through all pages for a given program and organization unit scope."""
+    """Optimized high-speed pagination using pageSize=500 and totalPages=false."""
     records = []
     page = 1
-    page_size = 250
+    page_size = 500
 
     while True:
         if is_legacy:
@@ -511,12 +459,12 @@ def fetch_paginated_tei(
                 params["orgUnit"] = ou
 
         try:
-            response = session.get(active_endpoint, params=params, timeout=40)
+            response = session.get(active_endpoint, params=params, timeout=30)
             if not response.ok and not is_legacy and "ouMode" in params:
                 params["orgUnitMode"] = params.pop("ouMode")
                 if "orgUnit" in params:
                     params["orgUnits"] = params.pop("orgUnit")
-                response = session.get(active_endpoint, params=params, timeout=40)
+                response = session.get(active_endpoint, params=params, timeout=30)
 
             if not response.ok:
                 break
@@ -551,10 +499,9 @@ def get_data_dhis2(
     idou: list[str],
     status_container=None,
 ) -> tuple[pd.DataFrame, dict[str, str]]:
-    """Extracts all data across multiple pages and organization units from DHIS2."""
     base_url = normalize_base_url(web)
     if status_container:
-        status_container.write("🔄 Fetching & caching DHIS2 metadata and Organization Unit mappings...")
+        status_container.write("🔄 Fetching & caching DHIS2 metadata...")
 
     meta_map, user_ous, is_legacy = fetch_cached_metadata(base_url, username, password)
     active_endpoint = (
@@ -580,7 +527,7 @@ def get_data_dhis2(
             ou_mode="ACCESSIBLE",
         )
         if not prog_records and candidate_ous:
-            with ThreadPoolExecutor(max_workers=6) as ou_executor:
+            with ThreadPoolExecutor(max_workers=8) as ou_executor:
                 futures = [
                     ou_executor.submit(
                         fetch_paginated_tei,
@@ -606,12 +553,10 @@ def get_data_dhis2(
             res_records = future.result()
             all_records.extend(res_records)
             if status_container:
-                status_container.write(f"✅ Extracted **{len(res_records):,}** server records from *{prog_label}*")
+                status_container.write(f"⚡ Extracted **{len(res_records):,}** records from *{prog_label}*")
 
     df_dhis2 = pd.DataFrame(all_records)
     if not df_dhis2.empty:
-        meta_map = resolve_missing_ou_names(session, base_url, df_dhis2, meta_map)
-
         if "orgUnit_id" in df_dhis2.columns and "Org Unit Name" in df_dhis2.columns:
             df_dhis2["Org Unit Name"] = df_dhis2["orgUnit_id"].map(meta_map).fillna(df_dhis2["Org Unit Name"])
             df_dhis2["Org Unit Name"] = clean_orgunit_name_series(df_dhis2["Org Unit Name"], meta_map)
@@ -633,10 +578,6 @@ def fast_combine_by_key(
     column_order: list[str],
     meta_map: dict[str, str] | None = None,
 ) -> pd.DataFrame:
-    """
-    Deduplicates and combines records by `join_key` (used for `df_registration`
-    and restored for `df_ygntbpro` merge/concat-by-UPI logic).
-    """
     if df.empty or join_key not in df.columns:
         return pd.DataFrame(columns=column_order)
 
@@ -690,7 +631,6 @@ def fast_combine_by_key(
 
 
 def count_unique_upis(df: pd.DataFrame, join_key: str) -> int:
-    """Returns the count of unique non-null UPIs in a DataFrame."""
     if df.empty or join_key not in df.columns:
         return 0
     return int(df[join_key].dropna().nunique())
@@ -704,15 +644,6 @@ def process_dhis2_data(
     end_date_str: str | None = None,
     meta_map: dict[str, str] | None = None,
 ) -> dict:
-    """
-    Executes the workflow:
-    1. Registration & Screening (`df_registration`): Filtered by OUs & dates, deduplicated by UPI.
-    2. Remaining Pages (`df_diagnostic`, `df_tbcs`, `df_tpt`): Filtered by `df_registration` UPIs
-       across all OUs keeping ALL multi-event records, sorted chronologically.
-    3. Combined (`df_combine`): Accumulated data across pages (unchanged, tracking all events).
-    4. YgnTBPro (`df_ygntbpro`): Restored logic of merging/concatenating data by UPI across combined data,
-       filtered by selected columns, sorted chronologically.
-    """
     all_cols = list(df_dhis2.columns)
     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df_dhis2.columns else "trackedEntityInstance"
 
@@ -721,15 +652,12 @@ def process_dhis2_data(
         df_dhis2[join_key] = df_dhis2[join_key].astype(str).str.strip()
         df_dhis2.loc[df_dhis2[join_key].isin(["", "None", "nan", "NaN"]), join_key] = None
 
-    # --- Split Raw Server Data by Program ---
     df_reg_raw = df_dhis2[df_dhis2["program_id"] == REGISTRATION_PROGRAM_ID].copy()
     df_diag_raw = df_dhis2[df_dhis2["program_id"] == DIAGNOSTIC_PROGRAM_ID].copy()
     df_tbcs_raw = df_dhis2[df_dhis2["program_id"] == TBCS_PROGRAM_ID].copy()
     df_tpt_raw = df_dhis2[df_dhis2["program_id"] == TPT_PROGRAM_ID].copy()
 
-    # --- Step 1: Process Registration & Screening (Deduplicated by UPI) ---
     df_reg_filtered = df_reg_raw.copy()
-
     if selected_ou_ids and not df_reg_filtered.empty:
         ou_mask = pd.Series(False, index=df_reg_filtered.index)
         if "orgUnit_id" in df_reg_filtered.columns:
@@ -755,7 +683,6 @@ def process_dhis2_data(
         else set()
     )
 
-    # --- Step 2: Process Remaining Pages (Keep ALL Duplicate UPI Records & Sort Chronologically) ---
     if registration_upis and join_key in df_dhis2.columns:
         df_diagnostic = sort_patient_records_chronologically(
             df_diag_raw[df_diag_raw[join_key].isin(registration_upis)].reindex(columns=all_cols),
@@ -774,18 +701,11 @@ def process_dhis2_data(
         df_tbcs = pd.DataFrame(columns=all_cols)
         df_tpt = pd.DataFrame(columns=all_cols)
 
-    # --- Step 3: Create `df_combine` (Combined Data Unchanged - Tracking All Multi-Event Records) ---
-    df_combine = pd.concat(
-        [df_registration, df_diagnostic, df_tbcs, df_tpt],
-        ignore_index=True,
-    )
-
+    df_combine = pd.concat([df_registration, df_diagnostic, df_tbcs, df_tpt], ignore_index=True)
     if "Org Unit Name" in df_combine.columns:
         df_combine["Org Unit Name"] = clean_orgunit_name_series(df_combine["Org Unit Name"], meta_map)
-
     df_combine = sort_patient_records_chronologically(df_combine, join_key)
 
-    # Apply standard column ordering
     df_dhis2 = reorder_columns(df_dhis2)
     df_registration = reorder_columns(df_registration)
     df_diagnostic = reorder_columns(df_diagnostic)
@@ -793,79 +713,22 @@ def process_dhis2_data(
     df_tpt = reorder_columns(df_tpt)
     df_combine = reorder_columns(df_combine)
 
-    # --- Step 4: Create `df_ygntbpro` (Restored Logic: Merge/Concat Data by UPI, Filtered & Ordered) ---
-    # Combine df_combine by UPI using fast_combine_by_key to restore the per-patient summary view
     df_ygntbpro_full = fast_combine_by_key(df_combine, join_key, all_cols, meta_map)
     existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df_ygntbpro_full.columns]
-    if existing_cols:
-        df_ygntbpro = reorder_columns(df_ygntbpro_full[existing_cols].copy())
-    else:
-        df_ygntbpro = pd.DataFrame()
-
+    df_ygntbpro = reorder_columns(df_ygntbpro_full[existing_cols].copy()) if existing_cols else pd.DataFrame()
     df_ygntbpro = sort_patient_records_chronologically(df_ygntbpro, join_key)
 
-    # --- Step 5: Build Data Summary Table ---
     summary_rows = [
-        {
-            "Page / Dataset": "1. Registration & Screening",
-            "Raw Server Records (All OUs)": len(df_reg_raw),
-            "Selected Cohort Records": len(df_reg_filtered),
-            "Final Sheet Rows": len(df_registration),
-            "Unique UPIs": count_unique_upis(df_registration, join_key),
-            "Processing Rule": "Deduplicated by UPI (Selected OUs & Criteria)",
-        },
-        {
-            "Page / Dataset": "2. Diagnostic Evaluation",
-            "Raw Server Records (All OUs)": len(df_diag_raw),
-            "Selected Cohort Records": len(df_diagnostic),
-            "Final Sheet Rows": len(df_diagnostic),
-            "Unique UPIs": count_unique_upis(df_diagnostic, join_key),
-            "Processing Rule": "All Multi-Event Records Kept (Multi-Visit Tracking)",
-        },
-        {
-            "Page / Dataset": "3. TB Surveillance",
-            "Raw Server Records (All OUs)": len(df_tbcs_raw),
-            "Selected Cohort Records": len(df_tbcs),
-            "Final Sheet Rows": len(df_tbcs),
-            "Unique UPIs": count_unique_upis(df_tbcs, join_key),
-            "Processing Rule": "All Multi-Event Records Kept (Multi-Visit Tracking)",
-        },
-        {
-            "Page / Dataset": "4. TB Contact Tracing and TPT",
-            "Raw Server Records (All OUs)": len(df_tpt_raw),
-            "Selected Cohort Records": len(df_tpt),
-            "Final Sheet Rows": len(df_tpt),
-            "Unique UPIs": count_unique_upis(df_tpt, join_key),
-            "Processing Rule": "All Multi-Event Records Kept (Multi-Visit Tracking)",
-        },
-        {
-            "Page / Dataset": "5. Combined (df_combine)",
-            "Raw Server Records (All OUs)": len(df_dhis2),
-            "Selected Cohort Records": len(df_combine),
-            "Final Sheet Rows": len(df_combine),
-            "Unique UPIs": count_unique_upis(df_combine, join_key),
-            "Processing Rule": "Accumulated Pages (Unchanged - Tracks All Events)",
-        },
-        {
-            "Page / Dataset": "6. YgnTBPro (df_ygntbpro)",
-            "Raw Server Records (All OUs)": len(df_dhis2),
-            "Selected Cohort Records": len(df_ygntbpro),
-            "Final Sheet Rows": len(df_ygntbpro),
-            "Unique UPIs": count_unique_upis(df_ygntbpro, join_key),
-            "Processing Rule": f"Restored Merge/Concat by UPI ({len(df_ygntbpro.columns)} selected cols)",
-        },
-        {
-            "Page / Dataset": "7. Raw DHIS2 Server Data (df_dhis2)",
-            "Raw Server Records (All OUs)": len(df_dhis2),
-            "Selected Cohort Records": len(df_dhis2),
-            "Final Sheet Rows": len(df_dhis2),
-            "Unique UPIs": count_unique_upis(df_dhis2, join_key),
-            "Processing Rule": "Optional CSV Download Only (Excluded from Excel)",
-        },
+        {"Page / Dataset": "1. Registration & Screening", "Final Rows": len(df_registration), "Unique UPIs": count_unique_upis(df_registration, join_key)},
+        {"Page / Dataset": "2. Diagnostic Evaluation", "Final Rows": len(df_diagnostic), "Unique UPIs": count_unique_upis(df_diagnostic, join_key)},
+        {"Page / Dataset": "3. TB Surveillance", "Final Rows": len(df_tbcs), "Unique UPIs": count_unique_upis(df_tbcs, join_key)},
+        {"Page / Dataset": "4. Contact Tracing & TPT", "Final Rows": len(df_tpt), "Unique UPIs": count_unique_upis(df_tpt, join_key)},
+        {"Page / Dataset": "5. Combined (df_combine)", "Final Rows": len(df_combine), "Unique UPIs": count_unique_upis(df_combine, join_key)},
+        {"Page / Dataset": "6. YgnTBPro (df_ygntbpro)", "Final Rows": len(df_ygntbpro), "Unique UPIs": count_unique_upis(df_ygntbpro, join_key)},
     ]
     df_summary = pd.DataFrame(summary_rows)
 
-    excel_sheets_dict: dict[str, pd.DataFrame] = {
+    excel_sheets_dict = {
         "Summary": df_summary,
         "YgnTBPro": df_ygntbpro,
         "Combined": df_combine,
@@ -888,93 +751,48 @@ def process_dhis2_data(
     }
 
 
-def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame], lightweight_mode: bool = False) -> bytes:
-    """Converts sheets into a formatted Excel workbook."""
+def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame], lightweight_mode: bool = True) -> bytes:
+    """Ultra-fast streaming Excel generator using openpyxl write_only mode to prevent timeouts."""
     output = io.BytesIO()
-    total_cells = sum(df.shape[0] * df.shape[1] for df in sheets_dict.values())
-    use_write_only = lightweight_mode or (total_cells > 180_000)
-
-    wb = openpyxl.Workbook(write_only=use_write_only)
-    if not use_write_only and wb.active:
-        wb.remove(wb.active)
-
+    wb = openpyxl.Workbook(write_only=True)
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-    data_font = Font(name="Segoe UI", size=10)
-    alt_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
-    thin_border = Border(
-        left=Side(style="thin", color="D9D9D9"),
-        right=Side(style="thin", color="D9D9D9"),
-        top=Side(style="thin", color="D9D9D9"),
-        bottom=Side(style="thin", color="D9D9D9"),
-    )
 
     for sheet_name, sheet_df in sheets_dict.items():
         ws = wb.create_sheet(title=sheet_name[:31])
         if sheet_name != "Summary":
             sheet_df = reorder_columns(sheet_df)
 
-        non_empty_cols = [
-            c for c in sheet_df.columns
-            if c in PRIORITY_LEADING_COLUMNS or sheet_df[c].notna().any()
-        ]
+        non_empty_cols = [c for c in sheet_df.columns if c in PRIORITY_LEADING_COLUMNS or sheet_df[c].notna().any()]
         clean_df = sheet_df[non_empty_cols].fillna("") if non_empty_cols else sheet_df.fillna("")
         headers = list(clean_df.columns)
         if not headers:
             continue
 
         for col_idx, col_name in enumerate(headers, start=1):
-            sample_max = (
-                clean_df[col_name].iloc[:500].astype(str).str.len().max()
-                if not clean_df.empty
-                else 0
-            )
-            max_len = max(len(str(col_name)), int(sample_max if pd.notna(sample_max) else 0))
-            col_letter = get_column_letter(col_idx)
-            ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
+            max_len = max(len(str(col_name)), 12)
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 40)
 
-        if use_write_only:
-            styled_headers = []
-            for h in headers:
-                cell = openpyxl.cell.WriteOnlyCell(ws, value=h)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                styled_headers.append(cell)
-            ws.append(styled_headers)
+        styled_headers = []
+        for h in headers:
+            cell = openpyxl.cell.WriteOnlyCell(ws, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            styled_headers.append(cell)
+        ws.append(styled_headers)
 
-            for row_tuple in clean_df.itertuples(index=False, name=None):
-                ws.append(list(row_tuple))
-        else:
-            ws.views.sheetView[0].showGridLines = True
-            ws.freeze_panes = "A2"
-            ws.append(headers)
-            for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.fill, cell.font = header_fill, header_font
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-            for row_idx, row_tuple in enumerate(clean_df.itertuples(index=False, name=None), start=2):
-                ws.append(list(row_tuple))
-                is_even = row_idx % 2 == 0
-                for col_idx in range(1, len(headers) + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
-                    cell.font, cell.border = data_font, thin_border
-                    cell.alignment = Alignment(vertical="center")
-                    if is_even:
-                        cell.fill = alt_fill
+        for row_tuple in clean_df.itertuples(index=False, name=None):
+            ws.append(list(row_tuple))
 
     wb.save(output)
     gc.collect()
     return output.getvalue()
 
 
-# --- Streamlit Sidebar & User Selection ---
+# --- Streamlit UI ---
 st.title("📊 DHIS2 TB Tracker Data Exporter")
-st.caption(
-    "Workflow: Extract All Server Data -> Deduplicate Registration & Screening by UPI -> "
-    "Keep All Multi-Event Records in Combined Sheet -> Merge/Concat by UPI in YgnTBPro Sheet"
-)
+st.caption("⚡ High-speed extraction & instant Excel streaming enabled.")
 
 with st.sidebar:
     st.header("⚙️ Server & Criteria Selection")
@@ -984,47 +802,19 @@ with st.sidebar:
         password = st.text_input("Password", type="password", value="District@1")
 
         st.divider()
-        st.subheader("🏥 Registration Criteria")
         selected_townships = st.multiselect(
             "Select Townships (Org Units)",
             options=list(TOWNSHIP_OU_MAP.keys()),
             default=list(TOWNSHIP_OU_MAP.keys()),
         )
 
-        use_date_filter = st.checkbox("Filter Registration by Enrollment Date", value=False)
-        d_col1, d_col2 = st.columns(2)
-        with d_col1:
-            start_date_input = st.date_input("Start Date", value=date(date.today().year, 1, 1))
-        with d_col2:
-            end_date_input = st.date_input("End Date", value=date.today())
-
-        st.divider()
-        st.subheader("📄 Programs & Export Options")
         selected_programs = st.multiselect(
             "Select Programs to Extract",
             options=list(PROGRAM_MAP.keys()),
             default=list(PROGRAM_MAP.keys()),
         )
 
-        export_excel_default = st.checkbox(
-            "Export Processed Sheets to Excel (.xlsx)",
-            value=True,
-            help="Selected by default. Generates the formatted Excel workbook.",
-        )
-
-        enable_raw_csv = st.checkbox(
-            "Optional CSV Export for Raw DHIS2 Data (df_dhis2)",
-            value=False,
-            help="Generates a UTF-8 CSV download for the full raw df_dhis2 dataset.",
-        )
-
-        lightweight_excel = st.checkbox(
-            "Fast Stream Mode for Excel",
-            value=False,
-            help="Enable if your dataset exceeds 10,000 rows.",
-        )
-
-        submitted = st.form_submit_button("🚀 Extract & Process Data", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("🚀 Fast Extract & Download Excel", type="primary", use_container_width=True)
 
 if submitted:
     prog_ids = list(dict.fromkeys([REGISTRATION_PROGRAM_ID] + [PROGRAM_MAP[p] for p in selected_programs]))
@@ -1033,149 +823,39 @@ if submitted:
         selected_ou_ids.extend(TOWNSHIP_OU_MAP[township])
 
     if not selected_ou_ids:
-        st.warning("Please select at least one Township for Registration & Screening.")
-    elif use_date_filter and start_date_input > end_date_input:
-        st.error("Start Date cannot be later than End Date.")
+        st.warning("Please select at least one Township.")
     else:
-        start_str = start_date_input.strftime("%Y-%m-%d") if use_date_filter else None
-        end_str = end_date_input.strftime("%Y-%m-%d") if use_date_filter else None
-
-        with st.status("Executing DHIS2 Extraction & Processing Workflow...", expanded=True) as status:
-            df_dhis2, meta_map = get_data_dhis2(
-                web=web_url,
-                username=username,
-                password=password,
-                idprogram=prog_ids,
-                idou=selected_ou_ids,
-                status_container=status,
-            )
+        with st.status("⚡ Running high-speed DHIS2 extraction & processing...", expanded=True) as status:
+            df_dhis2, meta_map = get_data_dhis2(web_url, username, password, prog_ids, selected_ou_ids, status_container=status)
 
             if df_dhis2.empty:
-                status.update(label="Extraction returned 0 records.", state="error", expanded=True)
-                st.error("No data extracted from DHIS2 server. Check your URL, credentials, or user permissions.")
+                status.update(label="Extraction returned 0 records.", state="error")
+                st.error("No data extracted.")
             else:
-                status.write(f"📊 Total raw records extracted into `df_dhis2`: **{len(df_dhis2):,}**")
-                status.write(
-                    "⚙️ Processing Registration (unique UPI), keeping multi-event rows in Combined, "
-                    "and merging/concatenating by UPI in YgnTBPro..."
-                )
+                status.write("⚙️ Processing cohort data & generating Excel workbook...")
+                processed = process_dhis2_data(df_dhis2=df_dhis2, selected_ou_ids=selected_ou_ids, selected_township_names=selected_townships, meta_map=meta_map)
+                excel_bytes = convert_df_to_excel_bytes(processed["excel_sheets_dict"])
 
-                processed = process_dhis2_data(
-                    df_dhis2=df_dhis2,
-                    selected_ou_ids=selected_ou_ids,
-                    selected_township_names=selected_townships,
-                    start_date_str=start_str,
-                    end_date_str=end_str,
-                    meta_map=meta_map,
-                )
+                st.session_state["dhis2_results"] = {**processed, "excel_bytes": excel_bytes}
+                status.update(label="✅ Ready for Download!", state="complete", expanded=False)
 
-                excel_bytes = None
-                if export_excel_default:
-                    status.write("📦 Building formatted Excel workbook (.xlsx)...")
-                    excel_bytes = convert_df_to_excel_bytes(
-                        processed["excel_sheets_dict"],
-                        lightweight_mode=lightweight_excel,
-                    )
-
-                csv_bytes = None
-                if enable_raw_csv:
-                    status.write("📄 Preparing optional UTF-8 CSV for raw `df_dhis2`...")
-                    csv_bytes = processed["df_dhis2"].to_csv(index=False).encode("utf-8-sig")
-
-                st.session_state["dhis2_results"] = {
-                    **processed,
-                    "excel_bytes": excel_bytes,
-                    "csv_bytes": csv_bytes,
-                    "lightweight_excel": lightweight_excel,
-                }
-                status.update(label="✅ Extraction & Processing Complete!", state="complete", expanded=False)
-
-# --- Display Summary, Downloads & Data Previews ---
 if "dhis2_results" in st.session_state:
     res = st.session_state["dhis2_results"]
-    df_dhis2 = res["df_dhis2"]
-    df_registration = res["df_registration"]
-    df_diagnostic = res["df_diagnostic"]
-    df_tbcs = res["df_tbcs"]
-    df_tpt = res["df_tpt"]
-    df_combine = res["df_combine"]
-    df_ygntbpro = res["df_ygntbpro"]
-    df_summary = res["df_summary"]
+    st.success(f"Successfully processed {len(res['df_dhis2']):,} total raw server records!")
 
-    # 1. Top-Level Record Count Metrics Across All Pages
-    st.subheader("📈 Data Summary & Record Counts by Page")
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Total DHIS2 Server (df_dhis2)", f"{len(df_dhis2):,}")
-    c2.metric("1. Registration (Unique UPI)", f"{len(df_registration):,}")
-    c3.metric("2. Diagnostic Eval (All Rows)", f"{len(df_diagnostic):,}")
-    c4.metric("3. TB Surveillance (All Rows)", f"{len(df_tbcs):,}")
-    c5.metric("4. Contact & TPT (All Rows)", f"{len(df_tpt):,}")
-    c6.metric("YgnTBPro (Merged by UPI)", f"{len(df_ygntbpro):,}")
-
-    # 2. Detailed Summary Table
-    st.dataframe(df_summary, use_container_width=True, hide_index=True)
-
-    # 3. Export & Download Section (Excel Default + Optional Raw CSV)
-    st.subheader("💾 Export & Download")
-    dl_col1, dl_col2 = st.columns(2)
-    with dl_col1:
-        if res.get("excel_bytes") is not None:
-            st.download_button(
-                label="📥 Download Processed Excel Workbook (.xlsx)",
-                data=res["excel_bytes"],
-                file_name="DHIS2_Processed_TB_Tracker.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True,
-            )
-        else:
-            if st.button("📦 Generate Excel Workbook (.xlsx) Now", type="primary", use_container_width=True):
-                st.session_state["dhis2_results"]["excel_bytes"] = convert_df_to_excel_bytes(
-                    res["excel_sheets_dict"],
-                    lightweight_mode=res.get("lightweight_excel", False),
-                )
-                st.rerun()
-
-    with dl_col2:
-        if res.get("csv_bytes") is not None:
-            st.download_button(
-                label=f"📄 Download Raw DHIS2 Server Data (.csv) [{len(df_dhis2):,} rows]",
-                data=res["csv_bytes"],
-                file_name="DHIS2_Raw_Server_Data.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            if st.button("⚙️ Generate Optional Raw DHIS2 Data (.csv)", use_container_width=True):
-                st.session_state["dhis2_results"]["csv_bytes"] = df_dhis2.to_csv(index=False).encode("utf-8-sig")
-                st.rerun()
+    st.download_button(
+        label="📥 Download Processed Excel Workbook (.xlsx) [Instant]",
+        data=res["excel_bytes"],
+        file_name="DHIS2_Processed_TB_Tracker.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        use_container_width=True,
+    )
 
     st.divider()
-
-    # 4. Interactive Page Preview Tabs
-    st.subheader("🔍 Preview Processed Pages (Sorted Chronologically)")
-    tabs = st.tabs([
-        f"📋 YgnTBPro (Merged by UPI) ({len(df_ygntbpro):,})",
-        f"🔗 Combined (Multi-Event) ({len(df_combine):,})",
-        f"🏥 1. Registration ({len(df_registration):,})",
-        f"🔬 2. Diagnostic Eval ({len(df_diagnostic):,})",
-        f"💊 3. TB Surveillance ({len(df_tbcs):,})",
-        f"🛡️ 4. Contact & TPT ({len(df_tpt):,})",
-        f"🗄️ Raw Server Data ({len(df_dhis2):,})",
-    ])
-
-    with tabs[0]:
-        st.dataframe(df_ygntbpro, use_container_width=True, height=400)
-    with tabs[1]:
-        st.dataframe(df_combine, use_container_width=True, height=400)
-    with tabs[2]:
-        st.dataframe(df_registration, use_container_width=True, height=400)
-    with tabs[3]:
-        st.dataframe(df_diagnostic, use_container_width=True, height=400)
-    with tabs[4]:
-        st.dataframe(df_tbcs, use_container_width=True, height=400)
-    with tabs[5]:
-        st.dataframe(df_tpt, use_container_width=True, height=400)
-    with tabs[6]:
-        st.caption("Showing top 1,000 rows of raw `df_dhis2`. Use the CSV button above to export the complete raw dataset.")
-        st.dataframe(df_dhis2.head(1000), use_container_width=True, height=400)
+    st.subheader("🔍 Data Preview")
+    tab1, tab2 = st.tabs(["📋 YgnTBPro (Merged by UPI)", "🔗 Combined (Multi-Event)"])
+    with tab1:
+        st.dataframe(res["df_ygntbpro"], use_container_width=True, height=400)
+    with tab2:
+        st.dataframe(res["df_combine"], use_container_width=True, height=400)
