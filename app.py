@@ -174,7 +174,7 @@ def create_http_session(username: str, password: str) -> requests.Session:
     """Creates a pooled HTTP session with automatic retries for DHIS2 requests."""
     session = requests.Session()
     session.auth = (username, password)
-    session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/6.1"})
+    session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/6.2"})
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=retries)
     session.mount("https://", adapter)
@@ -196,22 +196,13 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.DataFrame:
-    """
-    Sorts records by:
-    1. Unique ID (UPI) (ascending)
-    2. enrollment_date (chronologically ascending)
-    3. Program Cascade Order (Registration -> Diagnostic -> TB Surveillance -> TPT) for same-day visits
-    4. created timestamp (ascending)
-    """
+    """Sorts records chronologically by UPI and enrollment date."""
     if df.empty or join_key not in df.columns:
         return df
 
     sorted_df = df.copy()
-
-    # 1. Clean UPI sort key (pushes any missing UPIs to the bottom)
     sorted_df["_upi_sort"] = sorted_df[join_key].fillna("~~~~").astype(str).str.strip()
 
-    # 2. Extract first YYYY-MM-DD date if pipe-concatenated, parsed to datetime for accurate chronological sorting
     if "enrollment_date" in sorted_df.columns:
         first_date_str = (
             sorted_df["enrollment_date"]
@@ -226,7 +217,6 @@ def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.
     else:
         sorted_df["_date_sort"] = pd.NaT
 
-    # 3. Clinical cascade tie-breaker for same-day enrollments
     if "program_id" in sorted_df.columns:
         first_prog = sorted_df["program_id"].fillna("").astype(str).str.split("|").str[0].str.strip()
         sorted_df["_prog_sort"] = first_prog.map(PROGRAM_CASCADE_ORDER).fillna(99)
@@ -236,7 +226,6 @@ def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.
     else:
         sorted_df["_prog_sort"] = 99
 
-    # 4. Created timestamp tie-breaker
     if "created" in sorted_df.columns:
         sorted_df["_created_sort"] = sorted_df["created"].fillna("").astype(str)
     else:
@@ -257,10 +246,7 @@ def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.
 
 
 def clean_orgunit_name_series(series: pd.Series, meta_map: dict[str, str] | None = None) -> pd.Series:
-    """
-    Resolves any raw 11-character DHIS2 UIDs in `Org Unit Name` via `meta_map`
-    and strips unmapped UIDs if a human-readable OrgUnit name is already present.
-    """
+    """Resolves raw 11-character DHIS2 UIDs in `Org Unit Name`."""
     if series.empty:
         return series
 
@@ -359,10 +345,7 @@ def resolve_missing_ou_names(
     df: pd.DataFrame,
     meta_map: dict[str, str],
 ) -> dict[str, str]:
-    """
-    Checks if any `orgUnit_id` in `df` is still unmapped (or mapped to a raw 11-char UID)
-    and resolves it directly from `/api/organisationUnits.json?filter=id:in:[...]`.
-    """
+    """Resolves missing organization unit names from DHIS2 API."""
     if df.empty or "orgUnit_id" not in df.columns:
         return meta_map
 
@@ -391,10 +374,7 @@ def resolve_missing_ou_names(
 
 
 def parse_tei_instances(instances: list[dict], prog: str, meta_map: dict[str, str]) -> list[dict]:
-    """
-    Parses raw DHIS2 Tracked Entity Instances into flat dictionary records.
-    Preserves `enrollment_id` so multiple enrollments for the same UPI are retained.
-    """
+    """Parses raw DHIS2 Tracked Entity Instances into flat dictionary records."""
     records = []
     prog_name = PROGRAM_ID_TO_LABEL.get(prog) or meta_map.get(prog, prog)
 
@@ -571,10 +551,7 @@ def get_data_dhis2(
     idou: list[str],
     status_container=None,
 ) -> tuple[pd.DataFrame, dict[str, str]]:
-    """
-    Extracts all data across multiple pages and organization units from the DHIS2 server
-    to build the master `df_dhis2` DataFrame.
-    """
+    """Extracts all data across multiple pages and organization units from DHIS2."""
     base_url = normalize_base_url(web)
     if status_container:
         status_container.write("🔄 Fetching & caching DHIS2 metadata and Organization Unit mappings...")
@@ -657,7 +634,8 @@ def fast_combine_by_key(
     meta_map: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """
-    Deduplicates and combines records by `join_key` (applied ONLY to Registration & Screening).
+    Deduplicates and combines records by `join_key` (used for `df_registration`
+    and restored for `df_ygntbpro` merge/concat-by-UPI logic).
     """
     if df.empty or join_key not in df.columns:
         return pd.DataFrame(columns=column_order)
@@ -666,7 +644,6 @@ def fast_combine_by_key(
     if valid_df.empty:
         return pd.DataFrame(columns=column_order)
 
-    # Sort chronologically first so pipe-joined values in duplicate registration rows are ordered by date
     valid_df = sort_patient_records_chronologically(valid_df, join_key)
 
     dup_mask = valid_df.duplicated(subset=[join_key], keep=False)
@@ -728,14 +705,13 @@ def process_dhis2_data(
     meta_map: dict[str, str] | None = None,
 ) -> dict:
     """
-    Executes the multi-event processing & chronological sorting workflow:
-    1. Registration & Screening (`df_registration`): Filtered by selected OrgUnits & dates,
-       and deduplicated by UPI (`fast_combine_by_key`).
+    Executes the workflow:
+    1. Registration & Screening (`df_registration`): Filtered by OUs & dates, deduplicated by UPI.
     2. Remaining Pages (`df_diagnostic`, `df_tbcs`, `df_tpt`): Filtered by `df_registration` UPIs
-       across all OrgUnits WITHOUT deduplication by UPI, sorted by UPI and enrollment_date.
-    3. Combined (`df_combine`): Accumulated data across pages (`df_registration` + `df_diagnostic`
-       + `df_tbcs` + `df_tpt`), sorted by `Unique ID (UPI)` and `enrollment_date` (with program cascade tie-breaker).
-    4. YgnTBPro (`df_ygntbpro`): Filtered and ordered by `SELECTED_COLUMN_LIST` from the sorted `df_combine`.
+       across all OUs keeping ALL multi-event records, sorted chronologically.
+    3. Combined (`df_combine`): Accumulated data across pages (unchanged, tracking all events).
+    4. YgnTBPro (`df_ygntbpro`): Restored logic of merging/concatenating data by UPI across combined data,
+       filtered by selected columns, sorted chronologically.
     """
     all_cols = list(df_dhis2.columns)
     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df_dhis2.columns else "trackedEntityInstance"
@@ -772,7 +748,6 @@ def process_dhis2_data(
         if end_date_str:
             df_reg_filtered = df_reg_filtered[enr_dates <= end_date_str]
 
-    # Deduplicate by UPI ONLY for Registration & Screening
     df_registration = fast_combine_by_key(df_reg_filtered, join_key, all_cols, meta_map)
     registration_upis = (
         set(df_registration[join_key].dropna().unique())
@@ -799,7 +774,7 @@ def process_dhis2_data(
         df_tbcs = pd.DataFrame(columns=all_cols)
         df_tpt = pd.DataFrame(columns=all_cols)
 
-    # --- Step 3: Create `df_combine` (Accumulated by Pages & Sorted by UPI + enrollment_date) ---
+    # --- Step 3: Create `df_combine` (Combined Data Unchanged - Tracking All Multi-Event Records) ---
     df_combine = pd.concat(
         [df_registration, df_diagnostic, df_tbcs, df_tpt],
         ignore_index=True,
@@ -808,10 +783,9 @@ def process_dhis2_data(
     if "Org Unit Name" in df_combine.columns:
         df_combine["Org Unit Name"] = clean_orgunit_name_series(df_combine["Org Unit Name"], meta_map)
 
-    # Sort df_combine by Unique ID (UPI) and enrollment_date (with cascade order tie-breaker)
     df_combine = sort_patient_records_chronologically(df_combine, join_key)
 
-    # Apply standard column ordering: Date, OrgUnit, UPI, Name, Age, Sex -> Remaining
+    # Apply standard column ordering
     df_dhis2 = reorder_columns(df_dhis2)
     df_registration = reorder_columns(df_registration)
     df_diagnostic = reorder_columns(df_diagnostic)
@@ -819,13 +793,16 @@ def process_dhis2_data(
     df_tpt = reorder_columns(df_tpt)
     df_combine = reorder_columns(df_combine)
 
-    # --- Step 4: Create `df_ygntbpro` (Selected Columns Filtering & Ordering from Sorted `df_combine`) ---
-    existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df_combine.columns]
+    # --- Step 4: Create `df_ygntbpro` (Restored Logic: Merge/Concat Data by UPI, Filtered & Ordered) ---
+    # Combine df_combine by UPI using fast_combine_by_key to restore the per-patient summary view
+    df_ygntbpro_full = fast_combine_by_key(df_combine, join_key, all_cols, meta_map)
+    existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df_ygntbpro_full.columns]
     if existing_cols:
-        # Preserves the exact UPI + chronological row order from df_combine
-        df_ygntbpro = reorder_columns(df_combine[existing_cols].copy())
+        df_ygntbpro = reorder_columns(df_ygntbpro_full[existing_cols].copy())
     else:
         df_ygntbpro = pd.DataFrame()
+
+    df_ygntbpro = sort_patient_records_chronologically(df_ygntbpro, join_key)
 
     # --- Step 5: Build Data Summary Table ---
     summary_rows = [
@@ -835,7 +812,7 @@ def process_dhis2_data(
             "Selected Cohort Records": len(df_reg_filtered),
             "Final Sheet Rows": len(df_registration),
             "Unique UPIs": count_unique_upis(df_registration, join_key),
-            "Processing & Sorting Rule": "Deduplicated by UPI | Sorted by UPI & Date",
+            "Processing Rule": "Deduplicated by UPI (Selected OUs & Criteria)",
         },
         {
             "Page / Dataset": "2. Diagnostic Evaluation",
@@ -843,7 +820,7 @@ def process_dhis2_data(
             "Selected Cohort Records": len(df_diagnostic),
             "Final Sheet Rows": len(df_diagnostic),
             "Unique UPIs": count_unique_upis(df_diagnostic, join_key),
-            "Processing & Sorting Rule": "All UPI Records Kept | Sorted by UPI & Date",
+            "Processing Rule": "All Multi-Event Records Kept (Multi-Visit Tracking)",
         },
         {
             "Page / Dataset": "3. TB Surveillance",
@@ -851,7 +828,7 @@ def process_dhis2_data(
             "Selected Cohort Records": len(df_tbcs),
             "Final Sheet Rows": len(df_tbcs),
             "Unique UPIs": count_unique_upis(df_tbcs, join_key),
-            "Processing & Sorting Rule": "All UPI Records Kept | Sorted by UPI & Date",
+            "Processing Rule": "All Multi-Event Records Kept (Multi-Visit Tracking)",
         },
         {
             "Page / Dataset": "4. TB Contact Tracing and TPT",
@@ -859,7 +836,7 @@ def process_dhis2_data(
             "Selected Cohort Records": len(df_tpt),
             "Final Sheet Rows": len(df_tpt),
             "Unique UPIs": count_unique_upis(df_tpt, join_key),
-            "Processing & Sorting Rule": "All UPI Records Kept | Sorted by UPI & Date",
+            "Processing Rule": "All Multi-Event Records Kept (Multi-Visit Tracking)",
         },
         {
             "Page / Dataset": "5. Combined (df_combine)",
@@ -867,7 +844,7 @@ def process_dhis2_data(
             "Selected Cohort Records": len(df_combine),
             "Final Sheet Rows": len(df_combine),
             "Unique UPIs": count_unique_upis(df_combine, join_key),
-            "Processing & Sorting Rule": "Accumulated Pages | Grouped by UPI & Chronological Date",
+            "Processing Rule": "Accumulated Pages (Unchanged - Tracks All Events)",
         },
         {
             "Page / Dataset": "6. YgnTBPro (df_ygntbpro)",
@@ -875,7 +852,7 @@ def process_dhis2_data(
             "Selected Cohort Records": len(df_ygntbpro),
             "Final Sheet Rows": len(df_ygntbpro),
             "Unique UPIs": count_unique_upis(df_ygntbpro, join_key),
-            "Processing & Sorting Rule": f"Selected Columns ({len(df_ygntbpro.columns)} cols) | Grouped by UPI & Chronological Date",
+            "Processing Rule": f"Restored Merge/Concat by UPI ({len(df_ygntbpro.columns)} selected cols)",
         },
         {
             "Page / Dataset": "7. Raw DHIS2 Server Data (df_dhis2)",
@@ -883,7 +860,7 @@ def process_dhis2_data(
             "Selected Cohort Records": len(df_dhis2),
             "Final Sheet Rows": len(df_dhis2),
             "Unique UPIs": count_unique_upis(df_dhis2, join_key),
-            "Processing & Sorting Rule": "Optional CSV Download Only (Excluded from Excel)",
+            "Processing Rule": "Optional CSV Download Only (Excluded from Excel)",
         },
     ]
     df_summary = pd.DataFrame(summary_rows)
@@ -912,10 +889,7 @@ def process_dhis2_data(
 
 
 def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame], lightweight_mode: bool = False) -> bytes:
-    """
-    Converts the processed sheets dictionary into a formatted Excel workbook.
-    Preserves the priority column order (Date, OrgUnit, UPI, Name, Age, Sex -> Remaining).
-    """
+    """Converts sheets into a formatted Excel workbook."""
     output = io.BytesIO()
     total_cells = sum(df.shape[0] * df.shape[1] for df in sheets_dict.values())
     use_write_only = lightweight_mode or (total_cells > 180_000)
@@ -999,7 +973,7 @@ def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame], lightweight_
 st.title("📊 DHIS2 TB Tracker Data Exporter")
 st.caption(
     "Workflow: Extract All Server Data -> Deduplicate Registration & Screening by UPI -> "
-    "Keep All Multi-Episode Records in Remaining Pages -> Accumulate & Chronologically Sort Combined & YgnTBPro"
+    "Keep All Multi-Event Records in Combined Sheet -> Merge/Concat by UPI in YgnTBPro Sheet"
 )
 
 with st.sidebar:
@@ -1032,7 +1006,6 @@ with st.sidebar:
             default=list(PROGRAM_MAP.keys()),
         )
 
-        # Excel exporting is selected by default
         export_excel_default = st.checkbox(
             "Export Processed Sheets to Excel (.xlsx)",
             value=True,
@@ -1048,7 +1021,7 @@ with st.sidebar:
         lightweight_excel = st.checkbox(
             "Fast Stream Mode for Excel",
             value=False,
-            help="Enable if your accumulated cohort exceeds 10,000 rows.",
+            help="Enable if your dataset exceeds 10,000 rows.",
         )
 
         submitted = st.form_submit_button("🚀 Extract & Process Data", type="primary", use_container_width=True)
@@ -1067,7 +1040,7 @@ if submitted:
         start_str = start_date_input.strftime("%Y-%m-%d") if use_date_filter else None
         end_str = end_date_input.strftime("%Y-%m-%d") if use_date_filter else None
 
-        with st.status("Executing DHIS2 Extraction & Chronological Processing Workflow...", expanded=True) as status:
+        with st.status("Executing DHIS2 Extraction & Processing Workflow...", expanded=True) as status:
             df_dhis2, meta_map = get_data_dhis2(
                 web=web_url,
                 username=username,
@@ -1083,8 +1056,8 @@ if submitted:
             else:
                 status.write(f"📊 Total raw records extracted into `df_dhis2`: **{len(df_dhis2):,}**")
                 status.write(
-                    "⚙️ Deduplicating Registration & Screening by UPI, accumulating multi-episode "
-                    "records, and sorting `df_combine` & `df_ygntbpro` by UPI and enrollment date..."
+                    "⚙️ Processing Registration (unique UPI), keeping multi-event rows in Combined, "
+                    "and merging/concatenating by UPI in YgnTBPro..."
                 )
 
                 processed = process_dhis2_data(
@@ -1137,7 +1110,7 @@ if "dhis2_results" in st.session_state:
     c3.metric("2. Diagnostic Eval (All Rows)", f"{len(df_diagnostic):,}")
     c4.metric("3. TB Surveillance (All Rows)", f"{len(df_tbcs):,}")
     c5.metric("4. Contact & TPT (All Rows)", f"{len(df_tpt):,}")
-    c6.metric("Combined / YgnTBPro (Sorted)", f"{len(df_combine):,}")
+    c6.metric("YgnTBPro (Merged by UPI)", f"{len(df_ygntbpro):,}")
 
     # 2. Detailed Summary Table
     st.dataframe(df_summary, use_container_width=True, hide_index=True)
@@ -1180,10 +1153,10 @@ if "dhis2_results" in st.session_state:
     st.divider()
 
     # 4. Interactive Page Preview Tabs
-    st.subheader("🔍 Preview Processed Pages (Sorted by UPI & Enrollment Date)")
+    st.subheader("🔍 Preview Processed Pages (Sorted Chronologically)")
     tabs = st.tabs([
-        f"📋 YgnTBPro ({len(df_ygntbpro):,})",
-        f"🔗 Combined ({len(df_combine):,})",
+        f"📋 YgnTBPro (Merged by UPI) ({len(df_ygntbpro):,})",
+        f"🔗 Combined (Multi-Event) ({len(df_combine):,})",
         f"🏥 1. Registration ({len(df_registration):,})",
         f"🔬 2. Diagnostic Eval ({len(df_diagnostic):,})",
         f"💊 3. TB Surveillance ({len(df_tbcs):,})",
