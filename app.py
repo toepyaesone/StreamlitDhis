@@ -22,30 +22,31 @@ st.set_page_config(
 
 # --- Constants & Program / OrgUnit Mappings ---
 REGISTRATION_PROGRAM_ID = "UZF0HrTlps0"
-DIAGNOSTIC_PROGRAM_ID = "GvywHD6crky"
-TBCS_PROGRAM_ID = "Lt6P15ps7f6"
-TPT_PROGRAM_ID = "cQsXTtAJ3HW"
+DIAGNOSIS_PROGRAM_ID = "GvywHD6crky"
+SURVEILLANCE_PROGRAM_ID = "Lt6P15ps7f6"
+CONTACT_PROGRAM_ID = "cQsXTtAJ3HW"
 
 PROGRAM_MAP = {
     "Registration & Screening": REGISTRATION_PROGRAM_ID,
-    "Diagnostic Evaluation": DIAGNOSTIC_PROGRAM_ID,
-    "TB Surveillance": TBCS_PROGRAM_ID,
-    "TB Contact Tracing and TPT": TPT_PROGRAM_ID,
+    "Diagnostic Evaluation": DIAGNOSIS_PROGRAM_ID,
+    "TB Surveillance": SURVEILLANCE_PROGRAM_ID,
+    "TB Contact Tracing and TPT": CONTACT_PROGRAM_ID,
 }
 
 PROGRAM_ID_TO_LABEL = {v: k for k, v in PROGRAM_MAP.items()}
 
 PROGRAM_CASCADE_ORDER = {
     REGISTRATION_PROGRAM_ID: 1,
-    DIAGNOSTIC_PROGRAM_ID: 2,
-    TBCS_PROGRAM_ID: 3,
-    TPT_PROGRAM_ID: 4,
+    DIAGNOSIS_PROGRAM_ID: 2,
+    SURVEILLANCE_PROGRAM_ID: 3,
+    CONTACT_PROGRAM_ID: 4,
     "Registration & Screening": 1,
     "Diagnostic Evaluation": 2,
     "TB Surveillance": 3,
     "TB Contact Tracing and TPT": 4,
 }
 
+# Includes both Partner/YTP OUs and Township NTP OUs for different user accounts and roles
 TOWNSHIP_OU_MAP = {
     "12. YTP/Pyi Gyi Khin (Hlaing)": ["YGCPqlBamwD", "KqjORlUe8Yc"],
     "12. YTP/Pyi Gyi Khin (Kyeemyindaing)": ["dE0upZMc4xG", "rTTCKrLpxTB"],
@@ -56,6 +57,7 @@ TOWNSHIP_OU_MAP = {
     "12. YTP/Pyi Gyi Khin (Shwepyithar)": ["Z7Qf4wgtHz3", "aMAEOgli6W8"],
 }
 
+# Required leading column order: Date, OrgUnit, UPI, Name, Age, Sex
 PRIORITY_LEADING_COLUMNS = [
     "enrollment_date",
     "Org Unit Name",
@@ -66,7 +68,9 @@ PRIORITY_LEADING_COLUMNS = [
     "GEN - Sex",
 ]
 
+# YgnTBPro target columns ordered with Date, OrgUnit, UPI, Name, Age, Sex first
 SELECTED_COLUMN_LIST = [
+    # 1. Leading Priority Columns (Date, OrgUnit, UPI, Name, Age, Sex)
     "enrollment_date",
     "Org Unit Name",
     "orgUnit_id",
@@ -74,6 +78,7 @@ SELECTED_COLUMN_LIST = [
     "GEN - Name",
     "Age",
     "GEN - Sex",
+    # 2. Remaining Demographic & Administrative Columns
     "Nationality",
     "Home Address",
     "GEN - Contact phone number (local)",
@@ -94,6 +99,7 @@ SELECTED_COLUMN_LIST = [
     "enrollment_status",
     "program_id",
     "program_name",
+    # 3. TB Screening Columns
     "[TB Screening] Age (at screening)",
     "[TB Screening] Any TB drug resistance history?",
     "[TB Screening] BMI",
@@ -136,6 +142,7 @@ SELECTED_COLUMN_LIST = [
     "[TB Screening] Weight (in kgs)",
     "[TB Screening] Weight loss",
     "[TB Screening] Year of last TB Treatment",
+    # 4. TB Treatment & Outcome Columns
     "[2. TB Treatment] TB CS - Diagnosis date",
     "[2. TB Treatment] TB CS - First-line treatment regimen composition",
     "[2. TB Treatment] TB CS - First-line treatment start date",
@@ -155,6 +162,7 @@ UID_REGEX = re.compile(r"^[A-Za-z][A-Za-z0-9]{10}$")
 
 # --- Helper & Backend Functions ---
 def normalize_base_url(url: str) -> str:
+    """Ensures base_url is cleanly formatted without trailing slashes or duplicate /api paths."""
     clean_url = url.strip().rstrip("/")
     if clean_url.endswith("/api"):
         clean_url = clean_url[:-4]
@@ -162,9 +170,10 @@ def normalize_base_url(url: str) -> str:
 
 
 def create_http_session(username: str, password: str) -> requests.Session:
+    """Creates a pooled HTTP session with automatic retries for DHIS2 requests."""
     session = requests.Session()
     session.auth = (username, password)
-    session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/6.3"})
+    session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/7.0"})
     retries = Retry(total=2, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=retries)
     session.mount("https://", adapter)
@@ -173,6 +182,10 @@ def create_http_session(username: str, password: str) -> requests.Session:
 
 
 def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Orders any DataFrame so that Date, OrgUnit, UPI, Name, Age, Sex appear first,
+    followed by all remaining columns (excluding internal helper columns).
+    """
     if df.empty and len(df.columns) == 0:
         return df
     internal_cols = {"enrollment_id", "tei_orgUnit_id", "_upi_sort", "_date_sort", "_prog_sort", "_created_sort"}
@@ -182,6 +195,7 @@ def reorder_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.DataFrame:
+    """Sorts records by Unique ID (UPI), enrollment_date, and clinical cascade order."""
     if df.empty or join_key not in df.columns:
         return df
 
@@ -226,11 +240,11 @@ def sort_patient_records_chronologically(df: pd.DataFrame, join_key: str) -> pd.
         .drop(columns=["_upi_sort", "_date_sort", "_prog_sort", "_created_sort"])
         .reset_index(drop=True)
     )
-
     return sorted_df
 
 
 def clean_orgunit_name_series(series: pd.Series, meta_map: dict[str, str] | None = None) -> pd.Series:
+    """Uncodes raw 11-character DHIS2 UIDs in `Org Unit Name` into display values."""
     if series.empty:
         return series
 
@@ -251,16 +265,32 @@ def clean_orgunit_name_series(series: pd.Series, meta_map: dict[str, str] | None
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[dict[str, str], list[str], bool]:
+def fetch_cached_metadata(
+    base_url: str, username: str, password: str
+) -> tuple[dict[str, str], dict[str, dict[str, str]], list[str], bool]:
+    """
+    Fetches and caches:
+    1. `meta_map`: UID/Code -> Display Name for Programs, Stages, DataElements, Attributes, and OrgUnits.
+    2. `option_value_map`: Field-specific OptionSet code -> Display Name mapping for uncoding coded values.
+    3. `user_ous`: Accessible Organization Units for the user account/role.
+    4. `is_legacy`: Whether the server uses the legacy or modern Tracker API.
+    """
     session = create_http_session(username, password)
     meta_map: dict[str, str] = {}
+    option_value_map: dict[str, dict[str, str]] = {}
 
     endpoints = {
-        "trackedEntityAttributes": f"{base_url}/api/trackedEntityAttributes.json?fields=id,displayName&paging=false",
-        "dataElements": f"{base_url}/api/dataElements.json?fields=id,displayName&paging=false",
+        "trackedEntityAttributes": (
+            f"{base_url}/api/trackedEntityAttributes.json?"
+            "fields=id,displayName,optionSet[id,options[code,name,displayName]]&paging=false"
+        ),
+        "dataElements": (
+            f"{base_url}/api/dataElements.json?"
+            "fields=id,displayName,optionSet[id,options[code,name,displayName]]&paging=false"
+        ),
         "programStages": f"{base_url}/api/programStages.json?fields=id,displayName&paging=false",
         "programs": f"{base_url}/api/programs.json?fields=id,displayName&paging=false",
-        "organisationUnits": f"{base_url}/api/organisationUnits.json?fields=id,displayName,code&paging=false",
+        "organisationUnits": f"{base_url}/api/organisationUnits.json?fields=id,code,displayName&paging=false",
     }
 
     def _fetch_meta(resource_url: tuple[str, str]):
@@ -268,17 +298,34 @@ def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[
         try:
             res = session.get(url, timeout=25)
             if res.ok:
-                return res.json().get(resource, [])
+                return resource, res.json().get(resource, [])
         except Exception:
             pass
-        return []
+        return resource, []
 
     with ThreadPoolExecutor(max_workers=5) as executor:
-        for items in executor.map(_fetch_meta, endpoints.items()):
+        for resource, items in executor.map(_fetch_meta, endpoints.items()):
             for item in items:
                 uid = item.get("id")
-                if uid:
-                    meta_map[uid] = item.get("displayName") or item.get("code") or uid
+                if not uid:
+                    continue
+                display_name = item.get("displayName") or item.get("code") or uid
+                meta_map[uid] = display_name
+
+                if resource == "organisationUnits" and item.get("code"):
+                    meta_map[str(item["code"]).strip()] = display_name
+
+                # Build field-specific OptionSet code -> displayName dictionary
+                opt_set = item.get("optionSet")
+                if opt_set and isinstance(opt_set, dict):
+                    field_opts = {}
+                    for opt in opt_set.get("options", []):
+                        opt_code = str(opt.get("code", "")).strip()
+                        opt_label = opt.get("displayName") or opt.get("name") or opt_code
+                        if opt_code:
+                            field_opts[opt_code] = opt_label
+                    if field_opts:
+                        option_value_map[uid] = field_opts
 
     for t_name, uids in TOWNSHIP_OU_MAP.items():
         for uid in uids:
@@ -319,113 +366,19 @@ def fetch_cached_metadata(base_url: str, username: str, password: str) -> tuple[
         pass
 
     session.close()
-    return meta_map, list(user_ous), is_legacy
+    return meta_map, option_value_map, list(user_ous), is_legacy
 
 
-def parse_tei_instances(instances: list[dict], prog: str, meta_map: dict[str, str]) -> list[dict]:
-    records = []
-    prog_name = PROGRAM_ID_TO_LABEL.get(prog) or meta_map.get(prog, prog)
-
-    for instance in instances:
-        tei_id = instance.get("trackedEntityInstance") or instance.get("trackedEntity")
-        tei_ou_id = instance.get("orgUnit")
-        tei_ou_name = instance.get("orgUnitName") or meta_map.get(tei_ou_id, tei_ou_id)
-        if tei_ou_id and instance.get("orgUnitName"):
-            meta_map[tei_ou_id] = instance["orgUnitName"]
-
-        base_attrs = {}
-        for attr in instance.get("attributes", []):
-            val = attr.get("value")
-            if val is not None and str(val).strip() != "":
-                attr_id = attr.get("attribute")
-                col_name = attr.get("displayName") or meta_map.get(attr_id) or attr_id
-                base_attrs[col_name] = str(val).strip()
-
-        enrollments = [
-            enr for enr in instance.get("enrollments", [])
-            if enr.get("program") == prog
-        ]
-
-        if not enrollments:
-            records.append({
-                "program_id": prog,
-                "program_name": prog_name,
-                "trackedEntityInstance": tei_id,
-                "enrollment_id": f"no_enr_{tei_id}",
-                "orgUnit_id": tei_ou_id,
-                "tei_orgUnit_id": tei_ou_id,
-                "Org Unit Name": meta_map.get(tei_ou_id, tei_ou_name),
-                "created": instance.get("created") or instance.get("createdAt"),
-                "lastUpdated": instance.get("lastUpdated") or instance.get("updatedAt"),
-                **base_attrs,
-            })
-        else:
-            for enrollment in enrollments:
-                enr_id = enrollment.get("enrollment")
-                enr_ou_id = enrollment.get("orgUnit") or tei_ou_id
-                if enr_ou_id and enrollment.get("orgUnitName"):
-                    meta_map[enr_ou_id] = enrollment["orgUnitName"]
-
-                enr_ou_name = (
-                    enrollment.get("orgUnitName")
-                    or meta_map.get(enr_ou_id)
-                    or meta_map.get(tei_ou_id)
-                    or enr_ou_id
-                )
-                raw_enr_date = enrollment.get("enrolledAt") or enrollment.get("enrollmentDate")
-                enr_date_clean = str(raw_enr_date)[:10] if raw_enr_date else None
-
-                row = {
-                    "program_id": prog,
-                    "program_name": prog_name,
-                    "trackedEntityInstance": tei_id,
-                    "enrollment_id": enr_id,
-                    "orgUnit_id": enr_ou_id,
-                    "tei_orgUnit_id": tei_ou_id,
-                    "Org Unit Name": enr_ou_name,
-                    "created": instance.get("created") or instance.get("createdAt"),
-                    "lastUpdated": instance.get("lastUpdated") or instance.get("updatedAt"),
-                    "enrollment_date": enr_date_clean,
-                    "enrollment_status": enrollment.get("status"),
-                    **base_attrs,
-                }
-
-                for event in enrollment.get("events", []):
-                    stage_id = event.get("programStage")
-                    stage_name = meta_map.get(stage_id, f"Stage_{stage_id}")
-
-                    for dv in event.get("dataValues", []):
-                        val = dv.get("value")
-                        if val is None or str(val).strip() == "":
-                            continue
-                        de_id = dv.get("dataElement")
-                        de_name = meta_map.get(de_id, f"Element_{de_id}")
-                        col_key = f"[{stage_name}] {de_name}"
-
-                        val_str = str(val).strip()
-                        existing = row.get(col_key)
-                        if existing:
-                            if val_str not in existing.split(" | "):
-                                row[col_key] = f"{existing} | {val_str}"
-                        else:
-                            row[col_key] = val_str
-
-                records.append(row)
-
-    return records
-
-
-def fetch_paginated_tei(
+def fetch_raw_program_pages(
     session: requests.Session,
     active_endpoint: str,
     is_legacy: bool,
     prog: str,
-    meta_map: dict[str, str],
     ou: str | None = None,
     ou_mode: str = "ACCESSIBLE",
 ) -> list[dict]:
-    """Optimized high-speed pagination using pageSize=500 and totalPages=false."""
-    records = []
+    """Fetches raw Tracked Entity Instances (`data_dhis` chunks) for a program across all pages."""
+    raw_instances = []
     page = 1
     page_size = 500
 
@@ -479,7 +432,9 @@ def fetch_paginated_tei(
             if not instances:
                 break
 
-            records.extend(parse_tei_instances(instances, prog, meta_map))
+            for inst in instances:
+                inst["_queried_program"] = prog
+                raw_instances.append(inst)
 
             if len(instances) < page_size:
                 break
@@ -488,74 +443,135 @@ def fetch_paginated_tei(
         except Exception:
             break
 
-    return records
+    return raw_instances
 
 
-def get_data_dhis2(
-    web: str,
-    username: str,
-    password: str,
-    idprogram: list[str],
-    idou: list[str],
-    status_container=None,
-) -> tuple[pd.DataFrame, dict[str, str]]:
-    base_url = normalize_base_url(web)
-    if status_container:
-        status_container.write("🔄 Fetching & caching DHIS2 metadata...")
+def uncode_cell_value(
+    raw_val,
+    field_id: str,
+    meta_map: dict[str, str],
+    option_value_map: dict[str, dict[str, str]],
+) -> str | None:
+    """Uncodes raw DHIS2 option codes or Organization Unit UIDs into display values."""
+    if raw_val is None:
+        return None
+    val_str = str(raw_val).strip()
+    if val_str == "":
+        return None
 
-    meta_map, user_ous, is_legacy = fetch_cached_metadata(base_url, username, password)
-    active_endpoint = (
-        f"{base_url}/api/trackedEntityInstances.json"
-        if is_legacy
-        else f"{base_url}/api/tracker/trackedEntities.json"
-    )
+    # 1. Check field-specific OptionSet mapping first
+    if field_id in option_value_map and val_str in option_value_map[field_id]:
+        return option_value_map[field_id][val_str]
 
-    all_configured_ous = list({ou for ous in TOWNSHIP_OU_MAP.values() for ou in ous} | set(idou))
-    candidate_ous = list(dict.fromkeys(idou + all_configured_ous + user_ous))
+    # 2. If value is a 11-character UID (e.g., referral OrgUnit UID), uncode via meta_map
+    if UID_REGEX.match(val_str) and val_str in meta_map:
+        return meta_map[val_str]
 
-    session = create_http_session(username, password)
-    all_records = []
+    return val_str
 
-    def _fetch_program(prog: str) -> list[dict]:
-        prog_records = fetch_paginated_tei(
-            session=session,
-            active_endpoint=active_endpoint,
-            is_legacy=is_legacy,
-            prog=prog,
-            meta_map=meta_map,
-            ou=None,
-            ou_mode="ACCESSIBLE",
-        )
-        if not prog_records and candidate_ous:
-            with ThreadPoolExecutor(max_workers=8) as ou_executor:
-                futures = [
-                    ou_executor.submit(
-                        fetch_paginated_tei,
-                        session,
-                        active_endpoint,
-                        is_legacy,
-                        prog,
-                        meta_map,
-                        ou,
-                        "DESCENDANTS",
-                    )
-                    for ou in candidate_ous
-                ]
-                for fut in as_completed(futures):
-                    prog_records.extend(fut.result())
-        return prog_records
 
-    with ThreadPoolExecutor(max_workers=len(idprogram)) as prog_executor:
-        future_to_prog = {prog_executor.submit(_fetch_program, prog): prog for prog in idprogram}
-        for future in as_completed(future_to_prog):
-            prog_id = future_to_prog[future]
-            prog_label = PROGRAM_ID_TO_LABEL.get(prog_id) or meta_map.get(prog_id, prog_id)
-            res_records = future.result()
-            all_records.extend(res_records)
-            if status_container:
-                status_container.write(f"⚡ Extracted **{len(res_records):,}** records from *{prog_label}*")
+def build_uncoded_df_dhis2(
+    data_dhis: list[dict],
+    meta_map: dict[str, str],
+    option_value_map: dict[str, dict[str, str]],
+) -> pd.DataFrame:
+    """
+    Transforms raw `data_dhis` records into the uncoded source DataFrame `df_dhis2`
+    by replacing metadata UIDs and option codes with display values.
+    """
+    uncoded_rows = []
 
-    df_dhis2 = pd.DataFrame(all_records)
+    for instance in data_dhis:
+        prog = instance.get("_queried_program") or ""
+        prog_name = PROGRAM_ID_TO_LABEL.get(prog) or meta_map.get(prog, prog)
+        tei_id = instance.get("trackedEntityInstance") or instance.get("trackedEntity")
+        tei_ou_id = instance.get("orgUnit")
+        if tei_ou_id and instance.get("orgUnitName"):
+            meta_map[tei_ou_id] = instance["orgUnitName"]
+        tei_ou_name = instance.get("orgUnitName") or meta_map.get(tei_ou_id, tei_ou_id)
+
+        # Uncode Tracked Entity Attributes
+        base_attrs = {}
+        for attr in instance.get("attributes", []):
+            attr_id = attr.get("attribute") or ""
+            decoded_val = uncode_cell_value(attr.get("value"), attr_id, meta_map, option_value_map)
+            if decoded_val is not None:
+                col_name = attr.get("displayName") or meta_map.get(attr_id) or attr_id
+                base_attrs[col_name] = decoded_val
+
+        enrollments = [
+            enr for enr in instance.get("enrollments", [])
+            if enr.get("program") == prog
+        ]
+
+        if not enrollments:
+            uncoded_rows.append({
+                "program_id": prog,
+                "program_name": prog_name,
+                "trackedEntityInstance": tei_id,
+                "enrollment_id": f"no_enr_{tei_id}",
+                "orgUnit_id": tei_ou_id,
+                "tei_orgUnit_id": tei_ou_id,
+                "Org Unit Name": meta_map.get(tei_ou_id, tei_ou_name),
+                "created": instance.get("created") or instance.get("createdAt"),
+                "lastUpdated": instance.get("lastUpdated") or instance.get("updatedAt"),
+                **base_attrs,
+            })
+        else:
+            for enrollment in enrollments:
+                enr_id = enrollment.get("enrollment")
+                enr_ou_id = enrollment.get("orgUnit") or tei_ou_id
+                if enr_ou_id and enrollment.get("orgUnitName"):
+                    meta_map[enr_ou_id] = enrollment["orgUnitName"]
+
+                enr_ou_name = (
+                    enrollment.get("orgUnitName")
+                    or meta_map.get(enr_ou_id)
+                    or meta_map.get(tei_ou_id)
+                    or enr_ou_id
+                )
+                raw_enr_date = enrollment.get("enrolledAt") or enrollment.get("enrollmentDate")
+                enr_date_clean = str(raw_enr_date)[:10] if raw_enr_date else None
+
+                row = {
+                    "program_id": prog,
+                    "program_name": prog_name,
+                    "trackedEntityInstance": tei_id,
+                    "enrollment_id": enr_id,
+                    "orgUnit_id": enr_ou_id,
+                    "tei_orgUnit_id": tei_ou_id,
+                    "Org Unit Name": enr_ou_name,
+                    "created": instance.get("created") or instance.get("createdAt"),
+                    "lastUpdated": instance.get("lastUpdated") or instance.get("updatedAt"),
+                    "enrollment_date": enr_date_clean,
+                    "enrollment_status": enrollment.get("status"),
+                    **base_attrs,
+                }
+
+                # Uncode Program Stage Data Elements
+                for event in enrollment.get("events", []):
+                    stage_id = event.get("programStage") or ""
+                    stage_name = meta_map.get(stage_id, f"Stage_{stage_id}")
+
+                    for dv in event.get("dataValues", []):
+                        de_id = dv.get("dataElement") or ""
+                        decoded_val = uncode_cell_value(dv.get("value"), de_id, meta_map, option_value_map)
+                        if decoded_val is None:
+                            continue
+
+                        de_name = meta_map.get(de_id, f"Element_{de_id}")
+                        col_key = f"[{stage_name}] {de_name}"
+
+                        existing = row.get(col_key)
+                        if existing:
+                            if decoded_val not in existing.split(" | "):
+                                row[col_key] = f"{existing} | {decoded_val}"
+                        else:
+                            row[col_key] = decoded_val
+
+                uncoded_rows.append(row)
+
+    df_dhis2 = pd.DataFrame(uncoded_rows)
     if not df_dhis2.empty:
         if "orgUnit_id" in df_dhis2.columns and "Org Unit Name" in df_dhis2.columns:
             df_dhis2["Org Unit Name"] = df_dhis2["orgUnit_id"].map(meta_map).fillna(df_dhis2["Org Unit Name"])
@@ -568,8 +584,72 @@ def get_data_dhis2(
         if dedup_cols:
             df_dhis2 = df_dhis2.drop_duplicates(subset=dedup_cols, keep="first").reset_index(drop=True)
 
+    return df_dhis2
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_cached_source_df_dhis2(
+    web: str,
+    username: str,
+    password: str,
+    prog_ids_tuple: tuple[str, ...],
+) -> tuple[pd.DataFrame, dict[str, str], int]:
+    """
+    Stage 1 & 2 (Cached):
+    1. Extracts all raw data from DHIS2 (`data_dhis`).
+    2. Creates and caches the uncoded source DataFrame (`df_dhis2`).
+    """
+    base_url = normalize_base_url(web)
+    meta_map, option_value_map, user_ous, is_legacy = fetch_cached_metadata(base_url, username, password)
+    active_endpoint = (
+        f"{base_url}/api/trackedEntityInstances.json"
+        if is_legacy
+        else f"{base_url}/api/tracker/trackedEntities.json"
+    )
+
+    all_configured_ous = list({ou for ous in TOWNSHIP_OU_MAP.values() for ou in ous})
+    candidate_ous = list(dict.fromkeys(all_configured_ous + user_ous))
+
+    session = create_http_session(username, password)
+    data_dhis: list[dict] = []
+
+    def _fetch_program(prog: str) -> list[dict]:
+        prog_instances = fetch_raw_program_pages(
+            session=session,
+            active_endpoint=active_endpoint,
+            is_legacy=is_legacy,
+            prog=prog,
+            ou=None,
+            ou_mode="ACCESSIBLE",
+        )
+        if not prog_instances and candidate_ous:
+            with ThreadPoolExecutor(max_workers=8) as ou_executor:
+                futures = [
+                    ou_executor.submit(
+                        fetch_raw_program_pages,
+                        session,
+                        active_endpoint,
+                        is_legacy,
+                        prog,
+                        ou,
+                        "DESCENDANTS",
+                    )
+                    for ou in candidate_ous
+                ]
+                for fut in as_completed(futures):
+                    prog_instances.extend(fut.result())
+        return prog_instances
+
+    with ThreadPoolExecutor(max_workers=len(prog_ids_tuple)) as prog_executor:
+        futures = [prog_executor.submit(_fetch_program, p) for p in prog_ids_tuple]
+        for future in as_completed(futures):
+            data_dhis.extend(future.result())
+
     session.close()
-    return df_dhis2, meta_map
+
+    # Uncode `data_dhis` into `df_dhis2`
+    df_dhis2 = build_uncoded_df_dhis2(data_dhis, meta_map, option_value_map)
+    return df_dhis2, meta_map, len(data_dhis)
 
 
 def fast_combine_by_key(
@@ -578,6 +658,7 @@ def fast_combine_by_key(
     column_order: list[str],
     meta_map: dict[str, str] | None = None,
 ) -> pd.DataFrame:
+    """Vectorized deduplication and pipe-concatenation by `join_key`."""
     if df.empty or join_key not in df.columns:
         return pd.DataFrame(columns=column_order)
 
@@ -636,7 +717,7 @@ def count_unique_upis(df: pd.DataFrame, join_key: str) -> int:
     return int(df[join_key].dropna().nunique())
 
 
-def process_dhis2_data(
+def split_and_process_dataframes(
     df_dhis2: pd.DataFrame,
     selected_ou_ids: list[str],
     selected_township_names: list[str] | None = None,
@@ -644,20 +725,30 @@ def process_dhis2_data(
     end_date_str: str | None = None,
     meta_map: dict[str, str] | None = None,
 ) -> dict:
+    """
+    Stage 3, 4 & 5:
+    1. Splits `df_dhis2` into page DataFrames (`df_registration`, `df_diagnosis`, `df_surveillance`, `df_contact`).
+    2. Filters `df_registration` by selected OrgUnits & dates and deduplicates by UPI.
+    3. Filters `df_diagnosis`, `df_surveillance`, `df_contact` by all unique UPIs of `df_registration`
+       regardless of OrgUnit, keeping multiple records for different episodes.
+    4. Creates `df_combined` (accumulated multi-episode events) and `df_ygntbpro` (merged by UPI & column-filtered).
+    """
     all_cols = list(df_dhis2.columns)
     join_key = "Unique ID (UPI)" if "Unique ID (UPI)" in df_dhis2.columns else "trackedEntityInstance"
 
-    df_dhis2 = df_dhis2.copy()
-    if join_key in df_dhis2.columns:
-        df_dhis2[join_key] = df_dhis2[join_key].astype(str).str.strip()
-        df_dhis2.loc[df_dhis2[join_key].isin(["", "None", "nan", "NaN"]), join_key] = None
+    df_dhis2_clean = df_dhis2.copy()
+    if join_key in df_dhis2_clean.columns:
+        df_dhis2_clean[join_key] = df_dhis2_clean[join_key].astype(str).str.strip()
+        df_dhis2_clean.loc[df_dhis2_clean[join_key].isin(["", "None", "nan", "NaN"]), join_key] = None
 
-    df_reg_raw = df_dhis2[df_dhis2["program_id"] == REGISTRATION_PROGRAM_ID].copy()
-    df_diag_raw = df_dhis2[df_dhis2["program_id"] == DIAGNOSTIC_PROGRAM_ID].copy()
-    df_tbcs_raw = df_dhis2[df_dhis2["program_id"] == TBCS_PROGRAM_ID].copy()
-    df_tpt_raw = df_dhis2[df_dhis2["program_id"] == TPT_PROGRAM_ID].copy()
+    # --- Step 1: Split `df_dhis2` by Pages ---
+    df_registration_raw = df_dhis2_clean[df_dhis2_clean["program_id"] == REGISTRATION_PROGRAM_ID].copy()
+    df_diagnosis_raw = df_dhis2_clean[df_dhis2_clean["program_id"] == DIAGNOSIS_PROGRAM_ID].copy()
+    df_surveillance_raw = df_dhis2_clean[df_dhis2_clean["program_id"] == SURVEILLANCE_PROGRAM_ID].copy()
+    df_contact_raw = df_dhis2_clean[df_dhis2_clean["program_id"] == CONTACT_PROGRAM_ID].copy()
 
-    df_reg_filtered = df_reg_raw.copy()
+    # --- Step 2: Process `df_registration` (Filter Selected OrgUnits + Unique UPI) ---
+    df_reg_filtered = df_registration_raw.copy()
     if selected_ou_ids and not df_reg_filtered.empty:
         ou_mask = pd.Series(False, index=df_reg_filtered.index)
         if "orgUnit_id" in df_reg_filtered.columns:
@@ -683,76 +774,128 @@ def process_dhis2_data(
         else set()
     )
 
-    if registration_upis and join_key in df_dhis2.columns:
-        df_diagnostic = sort_patient_records_chronologically(
-            df_diag_raw[df_diag_raw[join_key].isin(registration_upis)].reindex(columns=all_cols),
+    # --- Step 3: Process `df_diagnosis`, `df_surveillance`, `df_contact` (Filter by UPI Regardless of OU, Keep Multiple Episodes) ---
+    if registration_upis and join_key in df_dhis2_clean.columns:
+        df_diagnosis = sort_patient_records_chronologically(
+            df_diagnosis_raw[df_diagnosis_raw[join_key].isin(registration_upis)].reindex(columns=all_cols),
             join_key,
         )
-        df_tbcs = sort_patient_records_chronologically(
-            df_tbcs_raw[df_tbcs_raw[join_key].isin(registration_upis)].reindex(columns=all_cols),
+        df_surveillance = sort_patient_records_chronologically(
+            df_surveillance_raw[df_surveillance_raw[join_key].isin(registration_upis)].reindex(columns=all_cols),
             join_key,
         )
-        df_tpt = sort_patient_records_chronologically(
-            df_tpt_raw[df_tpt_raw[join_key].isin(registration_upis)].reindex(columns=all_cols),
+        df_contact = sort_patient_records_chronologically(
+            df_contact_raw[df_contact_raw[join_key].isin(registration_upis)].reindex(columns=all_cols),
             join_key,
         )
     else:
-        df_diagnostic = pd.DataFrame(columns=all_cols)
-        df_tbcs = pd.DataFrame(columns=all_cols)
-        df_tpt = pd.DataFrame(columns=all_cols)
+        df_diagnosis = pd.DataFrame(columns=all_cols)
+        df_surveillance = pd.DataFrame(columns=all_cols)
+        df_contact = pd.DataFrame(columns=all_cols)
 
-    df_combine = pd.concat([df_registration, df_diagnostic, df_tbcs, df_tpt], ignore_index=True)
-    if "Org Unit Name" in df_combine.columns:
-        df_combine["Org Unit Name"] = clean_orgunit_name_series(df_combine["Org Unit Name"], meta_map)
-    df_combine = sort_patient_records_chronologically(df_combine, join_key)
+    # --- Step 4: Create `df_combined` (Accumulated Multi-Episode Events Across Pages) ---
+    df_combined = pd.concat(
+        [df_registration, df_diagnosis, df_surveillance, df_contact],
+        ignore_index=True,
+    )
+    if "Org Unit Name" in df_combined.columns:
+        df_combined["Org Unit Name"] = clean_orgunit_name_series(df_combined["Org Unit Name"], meta_map)
+    df_combined = sort_patient_records_chronologically(df_combined, join_key)
 
-    df_dhis2 = reorder_columns(df_dhis2)
+    # Apply priority column ordering (Date, OrgUnit, UPI, Name, Age, Sex -> Remaining)
+    df_dhis2_ordered = reorder_columns(df_dhis2_clean)
     df_registration = reorder_columns(df_registration)
-    df_diagnostic = reorder_columns(df_diagnostic)
-    df_tbcs = reorder_columns(df_tbcs)
-    df_tpt = reorder_columns(df_tpt)
-    df_combine = reorder_columns(df_combine)
+    df_diagnosis = reorder_columns(df_diagnosis)
+    df_surveillance = reorder_columns(df_surveillance)
+    df_contact = reorder_columns(df_contact)
+    df_combined = reorder_columns(df_combined)
 
-    df_ygntbpro_full = fast_combine_by_key(df_combine, join_key, all_cols, meta_map)
+    # --- Step 5: Create `df_ygntbpro` (Merged/Concatenated by UPI & Filtered by Selected Columns) ---
+    df_ygntbpro_full = fast_combine_by_key(df_combined, join_key, all_cols, meta_map)
     existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df_ygntbpro_full.columns]
     df_ygntbpro = reorder_columns(df_ygntbpro_full[existing_cols].copy()) if existing_cols else pd.DataFrame()
     df_ygntbpro = sort_patient_records_chronologically(df_ygntbpro, join_key)
 
+    # --- Step 6: Build Summary Table ---
     summary_rows = [
-        {"Page / Dataset": "1. Registration & Screening", "Final Rows": len(df_registration), "Unique UPIs": count_unique_upis(df_registration, join_key)},
-        {"Page / Dataset": "2. Diagnostic Evaluation", "Final Rows": len(df_diagnostic), "Unique UPIs": count_unique_upis(df_diagnostic, join_key)},
-        {"Page / Dataset": "3. TB Surveillance", "Final Rows": len(df_tbcs), "Unique UPIs": count_unique_upis(df_tbcs, join_key)},
-        {"Page / Dataset": "4. Contact Tracing & TPT", "Final Rows": len(df_tpt), "Unique UPIs": count_unique_upis(df_tpt, join_key)},
-        {"Page / Dataset": "5. Combined (df_combine)", "Final Rows": len(df_combine), "Unique UPIs": count_unique_upis(df_combine, join_key)},
-        {"Page / Dataset": "6. YgnTBPro (df_ygntbpro)", "Final Rows": len(df_ygntbpro), "Unique UPIs": count_unique_upis(df_ygntbpro, join_key)},
+        {
+            "DataFrame / Page": "df_dhis2 (Uncoded Source Cache)",
+            "Raw Server Rows": len(df_dhis2_ordered),
+            "Processed Cohort Rows": len(df_dhis2_ordered),
+            "Unique UPIs": count_unique_upis(df_dhis2_ordered, join_key),
+            "Logic Applied": "Uncoded Display Values (Optional CSV Export)",
+        },
+        {
+            "DataFrame / Page": "1. df_registration (Registration & Screening)",
+            "Raw Server Rows": len(df_registration_raw),
+            "Processed Cohort Rows": len(df_registration),
+            "Unique UPIs": count_unique_upis(df_registration, join_key),
+            "Logic Applied": "Filtered by Selected OrgUnits & Deduplicated by UPI",
+        },
+        {
+            "DataFrame / Page": "2. df_diagnosis (Diagnostic Evaluation)",
+            "Raw Server Rows": len(df_diagnosis_raw),
+            "Processed Cohort Rows": len(df_diagnosis),
+            "Unique UPIs": count_unique_upis(df_diagnosis, join_key),
+            "Logic Applied": "Filtered by df_registration UPIs (All OUs, Multi-Episode Kept)",
+        },
+        {
+            "DataFrame / Page": "3. df_surveillance (TB Surveillance)",
+            "Raw Server Rows": len(df_surveillance_raw),
+            "Processed Cohort Rows": len(df_surveillance),
+            "Unique UPIs": count_unique_upis(df_surveillance, join_key),
+            "Logic Applied": "Filtered by df_registration UPIs (All OUs, Multi-Episode Kept)",
+        },
+        {
+            "DataFrame / Page": "4. df_contact (TB Contact Tracing & TPT)",
+            "Raw Server Rows": len(df_contact_raw),
+            "Processed Cohort Rows": len(df_contact),
+            "Unique UPIs": count_unique_upis(df_contact, join_key),
+            "Logic Applied": "Filtered by df_registration UPIs (All OUs, Multi-Episode Kept)",
+        },
+        {
+            "DataFrame / Page": "5. df_combined (Combined Multi-Event Sheet)",
+            "Raw Server Rows": len(df_dhis2_ordered),
+            "Processed Cohort Rows": len(df_combined),
+            "Unique UPIs": count_unique_upis(df_combined, join_key),
+            "Logic Applied": "Accumulated Pages (df_registration + Remaining Pages, Sorted)",
+        },
+        {
+            "DataFrame / Page": "6. df_ygntbpro (YgnTBPro Summary Sheet)",
+            "Raw Server Rows": len(df_dhis2_ordered),
+            "Processed Cohort Rows": len(df_ygntbpro),
+            "Unique UPIs": count_unique_upis(df_ygntbpro, join_key),
+            "Logic Applied": f"Merged by UPI & Filtered ({len(df_ygntbpro.columns)} Selected Columns)",
+        },
     ]
     df_summary = pd.DataFrame(summary_rows)
 
     excel_sheets_dict = {
         "Summary": df_summary,
         "YgnTBPro": df_ygntbpro,
-        "Combined": df_combine,
+        "Combined": df_combined,
         "Registration & Screening": df_registration,
-        "Diagnostic Evaluation": df_diagnostic,
-        "TB Surveillance": df_tbcs,
-        "TB Contact Tracing and TPT": df_tpt,
+        "Diagnostic Evaluation": df_diagnosis,
+        "TB Surveillance": df_surveillance,
+        "TB Contact Tracing and TPT": df_contact,
     }
 
     return {
-        "df_dhis2": df_dhis2,
+        "df_dhis2": df_dhis2_ordered,
         "df_registration": df_registration,
-        "df_diagnostic": df_diagnostic,
-        "df_tbcs": df_tbcs,
-        "df_tpt": df_tpt,
-        "df_combine": df_combine,
+        "df_diagnosis": df_diagnosis,
+        "df_dignosis": df_diagnosis,  # Alias for compatibility
+        "df_surveillance": df_surveillance,
+        "df_contact": df_contact,
+        "df_combined": df_combined,
         "df_ygntbpro": df_ygntbpro,
         "df_summary": df_summary,
         "excel_sheets_dict": excel_sheets_dict,
     }
 
 
-def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame], lightweight_mode: bool = True) -> bytes:
-    """Ultra-fast streaming Excel generator using openpyxl write_only mode to prevent timeouts."""
+def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame]) -> bytes:
+    """Fast streaming Excel builder (`write_only=True`) excluding `df_dhis2`."""
     output = io.BytesIO()
     wb = openpyxl.Workbook(write_only=True)
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
@@ -763,15 +906,23 @@ def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame], lightweight_
         if sheet_name != "Summary":
             sheet_df = reorder_columns(sheet_df)
 
-        non_empty_cols = [c for c in sheet_df.columns if c in PRIORITY_LEADING_COLUMNS or sheet_df[c].notna().any()]
+        non_empty_cols = [
+            c for c in sheet_df.columns
+            if c in PRIORITY_LEADING_COLUMNS or sheet_df[c].notna().any()
+        ]
         clean_df = sheet_df[non_empty_cols].fillna("") if non_empty_cols else sheet_df.fillna("")
         headers = list(clean_df.columns)
         if not headers:
             continue
 
         for col_idx, col_name in enumerate(headers, start=1):
-            max_len = max(len(str(col_name)), 12)
-            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 40)
+            sample_max = (
+                clean_df[col_name].iloc[:300].astype(str).str.len().max()
+                if not clean_df.empty
+                else 0
+            )
+            max_len = max(len(str(col_name)), int(sample_max if pd.notna(sample_max) else 0), 12)
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 42)
 
         styled_headers = []
         for h in headers:
@@ -790,9 +941,12 @@ def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame], lightweight_
     return output.getvalue()
 
 
-# --- Streamlit UI ---
+# --- Streamlit Sidebar & UI ---
 st.title("📊 DHIS2 TB Tracker Data Exporter")
-st.caption("⚡ High-speed extraction & instant Excel streaming enabled.")
+st.caption(
+    "Workflow: `data_dhis` (Raw API) -> `df_dhis2` (Uncoded Cache) -> Page Split "
+    "(`df_registration`, `df_diagnosis`, `df_surveillance`, `df_contact`) -> `df_combined` & `df_ygntbpro`"
+)
 
 with st.sidebar:
     st.header("⚙️ Server & Criteria Selection")
@@ -802,60 +956,196 @@ with st.sidebar:
         password = st.text_input("Password", type="password", value="District@1")
 
         st.divider()
+        st.subheader("🏥 Registration Criteria")
         selected_townships = st.multiselect(
             "Select Townships (Org Units)",
             options=list(TOWNSHIP_OU_MAP.keys()),
             default=list(TOWNSHIP_OU_MAP.keys()),
         )
 
+        use_date_filter = st.checkbox("Filter Registration by Enrollment Date", value=False)
+        d_col1, d_col2 = st.columns(2)
+        with d_col1:
+            start_date_input = st.date_input("Start Date", value=date(date.today().year, 1, 1))
+        with d_col2:
+            end_date_input = st.date_input("End Date", value=date.today())
+
+        st.divider()
+        st.subheader("📄 Export & Cache Options")
         selected_programs = st.multiselect(
-            "Select Programs to Extract",
+            "Select Programs",
             options=list(PROGRAM_MAP.keys()),
             default=list(PROGRAM_MAP.keys()),
         )
 
-        submitted = st.form_submit_button("🚀 Fast Extract & Download Excel", type="primary", use_container_width=True)
+        export_excel_default = st.checkbox(
+            "Export Processed DataFrames to Excel (.xlsx)",
+            value=True,
+            help="Selected by default. Exports all processed DataFrames except df_dhis2.",
+        )
+
+        enable_raw_csv = st.checkbox(
+            "Optional CSV Export for Uncoded Source (df_dhis2)",
+            value=False,
+            help="Generates a UTF-8 CSV download for df_dhis2.",
+        )
+
+        force_refresh = st.checkbox(
+            "Force Re-Download from DHIS2 Server",
+            value=False,
+            help="Clears cached df_dhis2 and pulls fresh data_dhis from the server.",
+        )
+
+        submitted = st.form_submit_button("🚀 Extract, Process & Prepare Export", type="primary", use_container_width=True)
 
 if submitted:
-    prog_ids = list(dict.fromkeys([REGISTRATION_PROGRAM_ID] + [PROGRAM_MAP[p] for p in selected_programs]))
+    prog_ids = tuple(dict.fromkeys([REGISTRATION_PROGRAM_ID] + [PROGRAM_MAP[p] for p in selected_programs]))
     selected_ou_ids = []
     for township in selected_townships:
         selected_ou_ids.extend(TOWNSHIP_OU_MAP[township])
 
     if not selected_ou_ids:
-        st.warning("Please select at least one Township.")
+        st.warning("Please select at least one Township for `df_registration`.")
+    elif use_date_filter and start_date_input > end_date_input:
+        st.error("Start Date cannot be later than End Date.")
     else:
-        with st.status("⚡ Running high-speed DHIS2 extraction & processing...", expanded=True) as status:
-            df_dhis2, meta_map = get_data_dhis2(web_url, username, password, prog_ids, selected_ou_ids, status_container=status)
+        if force_refresh:
+            get_cached_source_df_dhis2.clear()
+
+        start_str = start_date_input.strftime("%Y-%m-%d") if use_date_filter else None
+        end_str = end_date_input.strftime("%Y-%m-%d") if use_date_filter else None
+
+        with st.status("Executing DHIS2 Extraction, Uncoding & Page Processing...", expanded=True) as status:
+            status.write("🔄 Step 1 & 2: Extracting `data_dhis` and building uncoded cache `df_dhis2`...")
+            df_dhis2, meta_map, raw_tei_count = get_cached_source_df_dhis2(
+                web=web_url,
+                username=username,
+                password=password,
+                prog_ids_tuple=prog_ids,
+            )
 
             if df_dhis2.empty:
-                status.update(label="Extraction returned 0 records.", state="error")
-                st.error("No data extracted.")
+                status.update(label="Extraction returned 0 records.", state="error", expanded=True)
+                st.error("No data extracted from DHIS2 server. Check your URL, credentials, or user permissions.")
             else:
-                status.write("⚙️ Processing cohort data & generating Excel workbook...")
-                processed = process_dhis2_data(df_dhis2=df_dhis2, selected_ou_ids=selected_ou_ids, selected_township_names=selected_townships, meta_map=meta_map)
-                excel_bytes = convert_df_to_excel_bytes(processed["excel_sheets_dict"])
+                status.write(
+                    f"✅ Uncoded source `df_dhis2` ready: **{len(df_dhis2):,}** enrollment rows "
+                    f"(from **{raw_tei_count:,}** raw `data_dhis` instances)."
+                )
+                status.write(
+                    "⚙️ Step 3 & 4: Splitting into `df_registration`, `df_diagnosis`, "
+                    "`df_surveillance`, `df_contact` and building `df_combined` & `df_ygntbpro`..."
+                )
 
-                st.session_state["dhis2_results"] = {**processed, "excel_bytes": excel_bytes}
-                status.update(label="✅ Ready for Download!", state="complete", expanded=False)
+                processed = split_and_process_dataframes(
+                    df_dhis2=df_dhis2,
+                    selected_ou_ids=selected_ou_ids,
+                    selected_township_names=selected_townships,
+                    start_date_str=start_str,
+                    end_date_str=end_str,
+                    meta_map=meta_map,
+                )
 
+                excel_bytes = None
+                if export_excel_default:
+                    status.write("📦 Step 5: Streaming processed DataFrames to Excel (`.xlsx`)...")
+                    excel_bytes = convert_df_to_excel_bytes(processed["excel_sheets_dict"])
+
+                csv_bytes = None
+                if enable_raw_csv:
+                    status.write("📄 Preparing optional UTF-8 CSV for `df_dhis2`...")
+                    csv_bytes = processed["df_dhis2"].to_csv(index=False).encode("utf-8-sig")
+
+                st.session_state["dhis2_results"] = {
+                    **processed,
+                    "excel_bytes": excel_bytes,
+                    "csv_bytes": csv_bytes,
+                }
+                status.update(label="✅ Processing Complete!", state="complete", expanded=False)
+
+# --- Display Summary, Downloads & DataFrame Previews ---
 if "dhis2_results" in st.session_state:
     res = st.session_state["dhis2_results"]
-    st.success(f"Successfully processed {len(res['df_dhis2']):,} total raw server records!")
+    df_dhis2 = res["df_dhis2"]
+    df_registration = res["df_registration"]
+    df_diagnosis = res["df_diagnosis"]
+    df_surveillance = res["df_surveillance"]
+    df_contact = res["df_contact"]
+    df_combined = res["df_combined"]
+    df_ygntbpro = res["df_ygntbpro"]
+    df_summary = res["df_summary"]
 
-    st.download_button(
-        label="📥 Download Processed Excel Workbook (.xlsx) [Instant]",
-        data=res["excel_bytes"],
-        file_name="DHIS2_Processed_TB_Tracker.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        use_container_width=True,
-    )
+    # 1. Top-Level Metrics for Each DataFrame
+    st.subheader("📈 Data Summary & Record Counts by DataFrame")
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    c1.metric("df_dhis2 (Source)", f"{len(df_dhis2):,}")
+    c2.metric("df_registration", f"{len(df_registration):,}")
+    c3.metric("df_diagnosis", f"{len(df_diagnosis):,}")
+    c4.metric("df_surveillance", f"{len(df_surveillance):,}")
+    c5.metric("df_contact", f"{len(df_contact):,}")
+    c6.metric("df_combined", f"{len(df_combined):,}")
+    c7.metric("df_ygntbpro", f"{len(df_ygntbpro):,}")
+
+    st.dataframe(df_summary, use_container_width=True, hide_index=True)
+
+    # 2. Export & Download Buttons
+    st.subheader("💾 Export & Download")
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        if res.get("excel_bytes") is not None:
+            st.download_button(
+                label="📥 Download Processed Excel Workbook (.xlsx)",
+                data=res["excel_bytes"],
+                file_name="DHIS2_Processed_TB_Tracker.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
+        else:
+            if st.button("📦 Generate Excel Workbook (.xlsx) Now", type="primary", use_container_width=True):
+                st.session_state["dhis2_results"]["excel_bytes"] = convert_df_to_excel_bytes(res["excel_sheets_dict"])
+                st.rerun()
+
+    with dl_col2:
+        if res.get("csv_bytes") is not None:
+            st.download_button(
+                label=f"📄 Download Uncoded Source df_dhis2 (.csv) [{len(df_dhis2):,} rows]",
+                data=res["csv_bytes"],
+                file_name="df_dhis2_uncoded_source.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            if st.button("⚙️ Generate Optional CSV for df_dhis2", use_container_width=True):
+                st.session_state["dhis2_results"]["csv_bytes"] = df_dhis2.to_csv(index=False).encode("utf-8-sig")
+                st.rerun()
 
     st.divider()
-    st.subheader("🔍 Data Preview")
-    tab1, tab2 = st.tabs(["📋 YgnTBPro (Merged by UPI)", "🔗 Combined (Multi-Event)"])
-    with tab1:
-        st.dataframe(res["df_ygntbpro"], use_container_width=True, height=400)
-    with tab2:
-        st.dataframe(res["df_combine"], use_container_width=True, height=400)
+
+    # 3. Interactive Preview Tabs for Each DataFrame
+    st.subheader("🔍 Preview DataFrames")
+    tabs = st.tabs([
+        f"📋 df_ygntbpro ({len(df_ygntbpro):,})",
+        f"🔗 df_combined ({len(df_combined):,})",
+        f"🏥 df_registration ({len(df_registration):,})",
+        f"🔬 df_diagnosis ({len(df_diagnosis):,})",
+        f"💊 df_surveillance ({len(df_surveillance):,})",
+        f"🛡️ df_contact ({len(df_contact):,})",
+        f"🗄️ df_dhis2 (Uncoded Source) ({len(df_dhis2):,})",
+    ])
+
+    with tabs[0]:
+        st.dataframe(df_ygntbpro, use_container_width=True, height=400)
+    with tabs[1]:
+        st.dataframe(df_combined, use_container_width=True, height=400)
+    with tabs[2]:
+        st.dataframe(df_registration, use_container_width=True, height=400)
+    with tabs[3]:
+        st.dataframe(df_diagnosis, use_container_width=True, height=400)
+    with tabs[4]:
+        st.dataframe(df_surveillance, use_container_width=True, height=400)
+    with tabs[5]:
+        st.dataframe(df_contact, use_container_width=True, height=400)
+    with tabs[6]:
+        st.caption("Showing top 1,000 rows of cached `df_dhis2`. Use the optional CSV export button above to download all rows.")
+        st.dataframe(df_dhis2.head(1000), use_container_width=True, height=400)
