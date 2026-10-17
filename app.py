@@ -1,3 +1,4 @@
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 import gc
@@ -175,7 +176,7 @@ def create_http_session(username: str, password: str) -> requests.Session:
     session.auth = (username, password)
     session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/7.0"})
     retries = Retry(total=2, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=retries)
+    adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
@@ -369,6 +370,80 @@ def fetch_cached_metadata(
     return meta_map, option_value_map, list(user_ous), is_legacy
 
 
+def _build_fetch_params(
+    is_legacy: bool,
+    prog: str,
+    ou: str | None,
+    ou_mode: str,
+    page: int,
+    page_size: int,
+) -> dict:
+    """Builds DHIS2 API query parameters for legacy or modern tracker endpoints."""
+    if is_legacy:
+        params = {
+            "program": prog,
+            "ouMode": ou_mode,
+            "pageSize": page_size,
+            "page": page,
+            "totalPages": "false",
+            "fields": (
+                "trackedEntityInstance,orgUnit,orgUnitName,created,lastUpdated,"
+                "attributes[attribute,displayName,value],"
+                "enrollments[enrollment,program,orgUnit,orgUnitName,enrolledAt,enrollmentDate,occurredAt,status,"
+                "events[event,programStage,occurredAt,status,dataValues[dataElement,value]]]"
+            ),
+        }
+        if ou:
+            params["ou"] = ou
+    else:
+        params = {
+            "program": prog,
+            "ouMode": ou_mode,
+            "pageSize": page_size,
+            "page": page,
+            "totalPages": "false",
+            "fields": "*",
+        }
+        if ou:
+            params["orgUnit"] = ou
+    return params
+
+
+def _fetch_single_page(
+    session: requests.Session,
+    active_endpoint: str,
+    is_legacy: bool,
+    prog: str,
+    ou: str | None,
+    ou_mode: str,
+    page: int,
+    page_size: int = 500,
+) -> list[dict]:
+    """Fetches a single page of tracked entities and tags each with the queried program."""
+    params = _build_fetch_params(is_legacy, prog, ou, ou_mode, page, page_size)
+    try:
+        response = session.get(active_endpoint, params=params, timeout=30)
+        if not response.ok and not is_legacy and "ouMode" in params:
+            params["orgUnitMode"] = params.pop("ouMode")
+            if "orgUnit" in params:
+                params["orgUnits"] = params.pop("orgUnit")
+            response = session.get(active_endpoint, params=params, timeout=30)
+        if not response.ok:
+            return []
+        data = response.json()
+        instances = (
+            data.get("trackedEntityInstances")
+            or data.get("instances")
+            or data.get("trackedEntities")
+            or []
+        )
+        for inst in instances:
+            inst["_queried_program"] = prog
+        return instances
+    except Exception:
+        return []
+
+
 def fetch_raw_program_pages(
     session: requests.Session,
     active_endpoint: str,
@@ -377,73 +452,42 @@ def fetch_raw_program_pages(
     ou: str | None = None,
     ou_mode: str = "ACCESSIBLE",
 ) -> list[dict]:
-    """Fetches raw Tracked Entity Instances (`data_dhis` chunks) for a program across all pages."""
-    raw_instances = []
-    page = 1
+    """Fetches all Tracked Entity pages in parallel after the first page establishes record count."""
     page_size = 500
 
+    # Fetch page 1 sequentially to determine if more pages exist
+    first_page = _fetch_single_page(session, active_endpoint, is_legacy, prog, ou, ou_mode, 1, page_size)
+    if not first_page or len(first_page) < page_size:
+        return first_page  # Single page or empty — done
+
+    all_instances = list(first_page)
+
+    # Fan out remaining pages in parallel batches of 15
+    batch_size = 15
+    page = 2
     while True:
-        if is_legacy:
-            params = {
-                "program": prog,
-                "ouMode": ou_mode,
-                "pageSize": page_size,
-                "page": page,
-                "totalPages": "false",
-                "fields": (
-                    "trackedEntityInstance,orgUnit,orgUnitName,created,lastUpdated,"
-                    "attributes[attribute,displayName,value],"
-                    "enrollments[enrollment,program,orgUnit,orgUnitName,enrolledAt,enrollmentDate,occurredAt,status,"
-                    "events[event,programStage,occurredAt,status,dataValues[dataElement,value]]]"
-                ),
-            }
-            if ou:
-                params["ou"] = ou
-        else:
-            params = {
-                "program": prog,
-                "ouMode": ou_mode,
-                "pageSize": page_size,
-                "page": page,
-                "totalPages": "false",
-                "fields": "*",
-            }
-            if ou:
-                params["orgUnit"] = ou
+        pages_in_batch = list(range(page, page + batch_size))
+        with ThreadPoolExecutor(max_workers=batch_size) as page_executor:
+            batch_results = list(page_executor.map(
+                lambda p: _fetch_single_page(session, active_endpoint, is_legacy, prog, ou, ou_mode, p, page_size),
+                pages_in_batch,
+            ))
 
-        try:
-            response = session.get(active_endpoint, params=params, timeout=30)
-            if not response.ok and not is_legacy and "ouMode" in params:
-                params["orgUnitMode"] = params.pop("ouMode")
-                if "orgUnit" in params:
-                    params["orgUnits"] = params.pop("orgUnit")
-                response = session.get(active_endpoint, params=params, timeout=30)
-
-            if not response.ok:
+        got_last_page = False
+        for result in batch_results:
+            if not result:
+                got_last_page = True
+                break
+            all_instances.extend(result)
+            if len(result) < page_size:
+                got_last_page = True
                 break
 
-            data = response.json()
-            instances = (
-                data.get("trackedEntityInstances")
-                or data.get("instances")
-                or data.get("trackedEntities")
-                or []
-            )
-            if not instances:
-                break
-
-            for inst in instances:
-                inst["_queried_program"] = prog
-                raw_instances.append(inst)
-
-            if len(instances) < page_size:
-                break
-
-            page += 1
-        except Exception:
+        if got_last_page:
             break
+        page += batch_size
 
-    return raw_instances
+    return all_instances
 
 
 def uncode_cell_value(
@@ -478,26 +522,43 @@ def build_uncoded_df_dhis2(
     """
     Transforms raw `data_dhis` records into the uncoded source DataFrame `df_dhis2`
     by replacing metadata UIDs and option codes with display values.
+    Optimized: local variable references for hot-path dicts, inlined uncode logic
+    to eliminate per-cell function call overhead.
     """
     uncoded_rows = []
+    # Cache hot-path references as locals to avoid repeated global lookups
+    _prog_label = PROGRAM_ID_TO_LABEL
+    _meta_get = meta_map.get
+    _opt_map = option_value_map
+    _uid_match = UID_REGEX.match
 
     for instance in data_dhis:
         prog = instance.get("_queried_program") or ""
-        prog_name = PROGRAM_ID_TO_LABEL.get(prog) or meta_map.get(prog, prog)
+        prog_name = _prog_label.get(prog) or _meta_get(prog, prog)
         tei_id = instance.get("trackedEntityInstance") or instance.get("trackedEntity")
         tei_ou_id = instance.get("orgUnit")
-        if tei_ou_id and instance.get("orgUnitName"):
-            meta_map[tei_ou_id] = instance["orgUnitName"]
-        tei_ou_name = instance.get("orgUnitName") or meta_map.get(tei_ou_id, tei_ou_id)
+        if tei_ou_id and (ou_name_raw := instance.get("orgUnitName")):
+            meta_map[tei_ou_id] = ou_name_raw
+        tei_ou_name = instance.get("orgUnitName") or _meta_get(tei_ou_id, tei_ou_id)
 
-        # Uncode Tracked Entity Attributes
+        # Uncode Tracked Entity Attributes (inlined for speed)
         base_attrs = {}
         for attr in instance.get("attributes", []):
             attr_id = attr.get("attribute") or ""
-            decoded_val = uncode_cell_value(attr.get("value"), attr_id, meta_map, option_value_map)
-            if decoded_val is not None:
-                col_name = attr.get("displayName") or meta_map.get(attr_id) or attr_id
-                base_attrs[col_name] = decoded_val
+            val = attr.get("value")
+            if val is None:
+                continue
+            val_str = str(val).strip()
+            if not val_str:
+                continue
+            if attr_id in _opt_map:
+                decoded_val = _opt_map[attr_id].get(val_str, val_str)
+            elif _uid_match(val_str) and val_str in meta_map:
+                decoded_val = meta_map[val_str]
+            else:
+                decoded_val = val_str
+            col_name = attr.get("displayName") or _meta_get(attr_id) or attr_id
+            base_attrs[col_name] = decoded_val
 
         enrollments = [
             enr for enr in instance.get("enrollments", [])
@@ -512,22 +573,24 @@ def build_uncoded_df_dhis2(
                 "enrollment_id": f"no_enr_{tei_id}",
                 "orgUnit_id": tei_ou_id,
                 "tei_orgUnit_id": tei_ou_id,
-                "Org Unit Name": meta_map.get(tei_ou_id, tei_ou_name),
+                "Org Unit Name": _meta_get(tei_ou_id, tei_ou_name),
                 "created": instance.get("created") or instance.get("createdAt"),
                 "lastUpdated": instance.get("lastUpdated") or instance.get("updatedAt"),
                 **base_attrs,
             })
         else:
+            inst_created = instance.get("created") or instance.get("createdAt")
+            inst_updated = instance.get("lastUpdated") or instance.get("updatedAt")
             for enrollment in enrollments:
                 enr_id = enrollment.get("enrollment")
                 enr_ou_id = enrollment.get("orgUnit") or tei_ou_id
-                if enr_ou_id and enrollment.get("orgUnitName"):
-                    meta_map[enr_ou_id] = enrollment["orgUnitName"]
+                if enr_ou_id and (enr_ou_name_raw := enrollment.get("orgUnitName")):
+                    meta_map[enr_ou_id] = enr_ou_name_raw
 
                 enr_ou_name = (
                     enrollment.get("orgUnitName")
-                    or meta_map.get(enr_ou_id)
-                    or meta_map.get(tei_ou_id)
+                    or _meta_get(enr_ou_id)
+                    or _meta_get(tei_ou_id)
                     or enr_ou_id
                 )
                 raw_enr_date = enrollment.get("enrolledAt") or enrollment.get("enrollmentDate")
@@ -541,25 +604,34 @@ def build_uncoded_df_dhis2(
                     "orgUnit_id": enr_ou_id,
                     "tei_orgUnit_id": tei_ou_id,
                     "Org Unit Name": enr_ou_name,
-                    "created": instance.get("created") or instance.get("createdAt"),
-                    "lastUpdated": instance.get("lastUpdated") or instance.get("updatedAt"),
+                    "created": inst_created,
+                    "lastUpdated": inst_updated,
                     "enrollment_date": enr_date_clean,
                     "enrollment_status": enrollment.get("status"),
                     **base_attrs,
                 }
 
-                # Uncode Program Stage Data Elements
+                # Uncode Program Stage Data Elements (inlined for speed)
                 for event in enrollment.get("events", []):
                     stage_id = event.get("programStage") or ""
-                    stage_name = meta_map.get(stage_id, f"Stage_{stage_id}")
+                    stage_name = _meta_get(stage_id, f"Stage_{stage_id}")
 
                     for dv in event.get("dataValues", []):
                         de_id = dv.get("dataElement") or ""
-                        decoded_val = uncode_cell_value(dv.get("value"), de_id, meta_map, option_value_map)
-                        if decoded_val is None:
+                        val = dv.get("value")
+                        if val is None:
                             continue
+                        val_str = str(val).strip()
+                        if not val_str:
+                            continue
+                        if de_id in _opt_map:
+                            decoded_val = _opt_map[de_id].get(val_str, val_str)
+                        elif _uid_match(val_str) and val_str in meta_map:
+                            decoded_val = meta_map[val_str]
+                        else:
+                            decoded_val = val_str
 
-                        de_name = meta_map.get(de_id, f"Element_{de_id}")
+                        de_name = _meta_get(de_id, f"Element_{de_id}")
                         col_key = f"[{stage_name}] {de_name}"
 
                         existing = row.get(col_key)
@@ -810,10 +882,14 @@ def split_and_process_dataframes(
     df_contact = reorder_columns(df_contact)
     df_combined = reorder_columns(df_combined)
 
-    # --- Step 5: Create `df_ygntbpro` (Merged/Concatenated by UPI & Filtered by Selected Columns) ---
-    df_ygntbpro_full = fast_combine_by_key(df_combined, join_key, all_cols, meta_map)
-    existing_cols = [col for col in SELECTED_COLUMN_LIST if col in df_ygntbpro_full.columns]
-    df_ygntbpro = reorder_columns(df_ygntbpro_full[existing_cols].copy()) if existing_cols else pd.DataFrame()
+    # --- Step 5: Create `df_ygntbpro` (Filter Columns First, Then Merge by UPI for Speed) ---
+    # Slimming df_combined to only the needed columns before combining reduces memory and CPU significantly.
+    candidate_ygn_cols = [join_key] + [
+        col for col in SELECTED_COLUMN_LIST if col in df_combined.columns and col != join_key
+    ]
+    df_combined_slim = df_combined[candidate_ygn_cols].copy() if candidate_ygn_cols else df_combined
+    df_ygntbpro = fast_combine_by_key(df_combined_slim, join_key, candidate_ygn_cols, meta_map)
+    df_ygntbpro = reorder_columns(df_ygntbpro)
     df_ygntbpro = sort_patient_records_chronologically(df_ygntbpro, join_key)
 
     # --- Step 6: Build Summary Table ---
@@ -933,8 +1009,9 @@ def convert_df_to_excel_bytes(sheets_dict: dict[str, pd.DataFrame]) -> bytes:
             styled_headers.append(cell)
         ws.append(styled_headers)
 
-        for row_tuple in clean_df.itertuples(index=False, name=None):
-            ws.append(list(row_tuple))
+        # values.tolist() is significantly faster than itertuples for large frames
+        for row in clean_df.values.tolist():
+            ws.append(row)
 
     wb.save(output)
     gc.collect()
@@ -1011,9 +1088,17 @@ if submitted:
     else:
         if force_refresh:
             get_cached_source_df_dhis2.clear()
+            st.session_state.pop("dhis2_results", None)
+            st.session_state.pop("_proc_cache_key", None)
 
         start_str = start_date_input.strftime("%Y-%m-%d") if use_date_filter else None
         end_str = end_date_input.strftime("%Y-%m-%d") if use_date_filter else None
+
+        # Build a lightweight cache key for the processing step.
+        # If filters haven't changed since last run, skip expensive re-processing.
+        _proc_cache_key = hashlib.md5(
+            f"{web_url}|{username}|{prog_ids}|{sorted(selected_ou_ids)}|{sorted(selected_townships)}|{start_str}|{end_str}".encode()
+        ).hexdigest()
 
         with st.status("Executing DHIS2 Extraction, Uncoding & Page Processing...", expanded=True) as status:
             status.write("🔄 Step 1 & 2: Extracting `data_dhis` and building uncoded cache `df_dhis2`...")
@@ -1032,36 +1117,49 @@ if submitted:
                     f"✅ Uncoded source `df_dhis2` ready: **{len(df_dhis2):,}** enrollment rows "
                     f"(from **{raw_tei_count:,}** raw `data_dhis` instances)."
                 )
-                status.write(
-                    "⚙️ Step 3 & 4: Splitting into `df_registration`, `df_diagnosis`, "
-                    "`df_surveillance`, `df_contact` and building `df_combined` & `df_ygntbpro`..."
-                )
 
-                processed = split_and_process_dataframes(
-                    df_dhis2=df_dhis2,
-                    selected_ou_ids=selected_ou_ids,
-                    selected_township_names=selected_townships,
-                    start_date_str=start_str,
-                    end_date_str=end_str,
-                    meta_map=meta_map,
-                )
+                # Skip expensive processing if filters and data are unchanged
+                if (
+                    st.session_state.get("_proc_cache_key") == _proc_cache_key
+                    and "dhis2_results" in st.session_state
+                ):
+                    status.update(
+                        label="✅ Filters unchanged — using cached processed results!",
+                        state="complete",
+                        expanded=False,
+                    )
+                else:
+                    status.write(
+                        "⚙️ Step 3 & 4: Splitting into `df_registration`, `df_diagnosis`, "
+                        "`df_surveillance`, `df_contact` and building `df_combined` & `df_ygntbpro`..."
+                    )
 
-                excel_bytes = None
-                if export_excel_default:
-                    status.write("📦 Step 5: Streaming processed DataFrames to Excel (`.xlsx`)...")
-                    excel_bytes = convert_df_to_excel_bytes(processed["excel_sheets_dict"])
+                    processed = split_and_process_dataframes(
+                        df_dhis2=df_dhis2,
+                        selected_ou_ids=selected_ou_ids,
+                        selected_township_names=selected_townships,
+                        start_date_str=start_str,
+                        end_date_str=end_str,
+                        meta_map=meta_map,
+                    )
 
-                csv_bytes = None
-                if enable_raw_csv:
-                    status.write("📄 Preparing optional UTF-8 CSV for `df_dhis2`...")
-                    csv_bytes = processed["df_dhis2"].to_csv(index=False).encode("utf-8-sig")
+                    excel_bytes = None
+                    if export_excel_default:
+                        status.write("📦 Step 5: Streaming processed DataFrames to Excel (`.xlsx`)...")
+                        excel_bytes = convert_df_to_excel_bytes(processed["excel_sheets_dict"])
 
-                st.session_state["dhis2_results"] = {
-                    **processed,
-                    "excel_bytes": excel_bytes,
-                    "csv_bytes": csv_bytes,
-                }
-                status.update(label="✅ Processing Complete!", state="complete", expanded=False)
+                    csv_bytes = None
+                    if enable_raw_csv:
+                        status.write("📄 Preparing optional UTF-8 CSV for `df_dhis2`...")
+                        csv_bytes = processed["df_dhis2"].to_csv(index=False).encode("utf-8-sig")
+
+                    st.session_state["dhis2_results"] = {
+                        **processed,
+                        "excel_bytes": excel_bytes,
+                        "csv_bytes": csv_bytes,
+                    }
+                    st.session_state["_proc_cache_key"] = _proc_cache_key
+                    status.update(label="✅ Processing Complete!", state="complete", expanded=False)
 
 # --- Display Summary, Downloads & DataFrame Previews ---
 if "dhis2_results" in st.session_state:
@@ -1134,18 +1232,31 @@ if "dhis2_results" in st.session_state:
         f"🗄️ df_dhis2 (Uncoded Source) ({len(df_dhis2):,})",
     ])
 
+    # Lazy rendering: render only 300 rows per tab to keep the UI fast.
+    # Full data is available via the Excel/CSV download buttons above.
+    _PREVIEW_ROWS = 300
+
     with tabs[0]:
-        st.dataframe(df_ygntbpro, use_container_width=True, height=400)
+        st.caption(f"Previewing first {_PREVIEW_ROWS:,} of **{len(df_ygntbpro):,}** rows — download Excel for full data.")
+        st.dataframe(df_ygntbpro.head(_PREVIEW_ROWS), use_container_width=True, height=400)
     with tabs[1]:
-        st.dataframe(df_combined, use_container_width=True, height=400)
+        st.caption(f"Previewing first {_PREVIEW_ROWS:,} of **{len(df_combined):,}** rows — download Excel for full data.")
+        st.dataframe(df_combined.head(_PREVIEW_ROWS), use_container_width=True, height=400)
     with tabs[2]:
-        st.dataframe(df_registration, use_container_width=True, height=400)
+        st.caption(f"Previewing first {_PREVIEW_ROWS:,} of **{len(df_registration):,}** rows — download Excel for full data.")
+        st.dataframe(df_registration.head(_PREVIEW_ROWS), use_container_width=True, height=400)
     with tabs[3]:
-        st.dataframe(df_diagnosis, use_container_width=True, height=400)
+        st.caption(f"Previewing first {_PREVIEW_ROWS:,} of **{len(df_diagnosis):,}** rows — download Excel for full data.")
+        st.dataframe(df_diagnosis.head(_PREVIEW_ROWS), use_container_width=True, height=400)
     with tabs[4]:
-        st.dataframe(df_surveillance, use_container_width=True, height=400)
+        st.caption(f"Previewing first {_PREVIEW_ROWS:,} of **{len(df_surveillance):,}** rows — download Excel for full data.")
+        st.dataframe(df_surveillance.head(_PREVIEW_ROWS), use_container_width=True, height=400)
     with tabs[5]:
-        st.dataframe(df_contact, use_container_width=True, height=400)
+        st.caption(f"Previewing first {_PREVIEW_ROWS:,} of **{len(df_contact):,}** rows — download Excel for full data.")
+        st.dataframe(df_contact.head(_PREVIEW_ROWS), use_container_width=True, height=400)
     with tabs[6]:
-        st.caption("Showing top 1,000 rows of cached `df_dhis2`. Use the optional CSV export button above to download all rows.")
-        st.dataframe(df_dhis2.head(1000), use_container_width=True, height=400)
+        st.caption(
+            f"Previewing first {_PREVIEW_ROWS:,} of **{len(df_dhis2):,}** rows of cached `df_dhis2`. "
+            "Use the optional CSV export button above to download all rows."
+        )
+        st.dataframe(df_dhis2.head(_PREVIEW_ROWS), use_container_width=True, height=400)
