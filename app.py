@@ -453,25 +453,32 @@ def fetch_raw_program_pages(
     ou_mode: str = "ACCESSIBLE",
 ) -> list[dict]:
     """Fetches all Tracked Entity pages in parallel after the first page establishes record count."""
+    from functools import partial
+
     page_size = 500
 
     # Fetch page 1 sequentially to determine if more pages exist
     first_page = _fetch_single_page(session, active_endpoint, is_legacy, prog, ou, ou_mode, 1, page_size)
-    if not first_page or len(first_page) < page_size:
-        return first_page  # Single page or empty — done
+    if not first_page:
+        return []
+    if len(first_page) < page_size:
+        return first_page  # Single page — done
 
     all_instances = list(first_page)
 
-    # Fan out remaining pages in parallel batches of 15
+    # Fan out remaining pages in parallel batches of 15.
+    # Using functools.partial instead of a lambda avoids the Python closure
+    # bug where all threads would capture the same (last) value of `p`.
+    _fetch_page = partial(
+        _fetch_single_page, session, active_endpoint, is_legacy, prog, ou, ou_mode, page_size=page_size
+    )
+
     batch_size = 15
     page = 2
     while True:
         pages_in_batch = list(range(page, page + batch_size))
         with ThreadPoolExecutor(max_workers=batch_size) as page_executor:
-            batch_results = list(page_executor.map(
-                lambda p: _fetch_single_page(session, active_endpoint, is_legacy, prog, ou, ou_mode, p, page_size),
-                pages_in_batch,
-            ))
+            batch_results = list(page_executor.map(_fetch_page, pages_in_batch))
 
         got_last_page = False
         for result in batch_results:
