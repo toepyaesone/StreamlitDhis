@@ -176,7 +176,9 @@ def create_http_session(username: str, password: str) -> requests.Session:
     session.auth = (username, password)
     session.headers.update({"Accept": "application/json", "User-Agent": "DHIS2-Streamlit-Exporter/7.0"})
     retries = Retry(total=2, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=retries)
+    # Cloud-safe pool: free tier has limited file descriptors and memory.
+    # 10 connections is sufficient for sequential + small parallel fetches.
+    adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
@@ -265,7 +267,8 @@ def clean_orgunit_name_series(series: pd.Series, meta_map: dict[str, str] | None
     return series.map(_clean_val)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# max_entries=1: only keep the latest metadata fetch in memory (cloud RAM limit).
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
 def fetch_cached_metadata(
     base_url: str, username: str, password: str
 ) -> tuple[dict[str, str], dict[str, dict[str, str]], list[str], bool]:
@@ -304,7 +307,8 @@ def fetch_cached_metadata(
             pass
         return resource, []
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    # 3 workers: fetch metadata endpoints in small parallel batches (cloud-safe).
+    with ThreadPoolExecutor(max_workers=3) as executor:
         for resource, items in executor.map(_fetch_meta, endpoints.items()):
             for item in items:
                 uid = item.get("id")
@@ -473,7 +477,9 @@ def fetch_raw_program_pages(
         _fetch_single_page, session, active_endpoint, is_legacy, prog, ou, ou_mode, page_size=page_size
     )
 
-    batch_size = 15
+    # batch_size=3: on free tier, spawning 15 page threads simultaneously
+    # consumes too much memory. 3 is a safe, still-parallel value.
+    batch_size = 3
     page = 2
     while True:
         pages_in_batch = list(range(page, page + batch_size))
@@ -666,7 +672,8 @@ def build_uncoded_df_dhis2(
     return df_dhis2
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+# max_entries=1: only keep the latest source DataFrame in memory (cloud RAM limit).
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=1)
 def get_cached_source_df_dhis2(
     web: str,
     username: str,
@@ -702,7 +709,9 @@ def get_cached_source_df_dhis2(
             ou_mode="ACCESSIBLE",
         )
         if not prog_instances and candidate_ous:
-            with ThreadPoolExecutor(max_workers=8) as ou_executor:
+            # 3 OU workers: prevents thread explosion on free tier.
+            # 8 workers × 4 programs × 15 pages = 480 threads → OOM crash.
+            with ThreadPoolExecutor(max_workers=3) as ou_executor:
                 futures = [
                     ou_executor.submit(
                         fetch_raw_program_pages,
@@ -719,16 +728,22 @@ def get_cached_source_df_dhis2(
                     prog_instances.extend(fut.result())
         return prog_instances
 
-    with ThreadPoolExecutor(max_workers=len(prog_ids_tuple)) as prog_executor:
+    # Cap at 2 program workers: each program itself spawns OU + page threads.
+    # Running all 4 programs fully in parallel exceeds free-tier limits.
+    with ThreadPoolExecutor(max_workers=min(2, len(prog_ids_tuple))) as prog_executor:
         futures = [prog_executor.submit(_fetch_program, p) for p in prog_ids_tuple]
         for future in as_completed(futures):
             data_dhis.extend(future.result())
 
     session.close()
 
-    # Uncode `data_dhis` into `df_dhis2`
+    # Uncode `data_dhis` into `df_dhis2`, then immediately free the raw JSON
+    # list — on free-tier (1 GB RAM) it can be 100–300 MB while the DataFrame
+    # also lives in memory.
     df_dhis2 = build_uncoded_df_dhis2(data_dhis, meta_map, option_value_map)
-    return df_dhis2, meta_map, len(data_dhis)
+    del data_dhis
+    gc.collect()
+    return df_dhis2, meta_map, len(df_dhis2)
 
 
 def fast_combine_by_key(
